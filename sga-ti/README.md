@@ -62,6 +62,43 @@ aba **Usuários**.
 - **Manutenção** registra a intervenção concluída sem alterar status nem responsável.
 - **Descarte** → `Descartado` (final).
 
+## Interface e design system
+
+Tema **escuro por padrão**, com alternador de três estados (Escuro / Claro / Sistema) no rodapé da
+barra lateral e também na tela de login. A escolha fica no `localStorage` e o tema é resolvido por
+um script inline no `<head>`, **antes da primeira pintura** — sem flash de tela clara ao carregar.
+"Sistema" acompanha o `prefers-color-scheme` do dispositivo em tempo real, sem recarregar.
+
+Toda a cor vive em tokens semânticos num único lugar (`public/styles.css`): `:root` carrega o tema
+escuro e `:root[data-tema="claro"]` sobrescreve os mesmos nomes. Para trocar a paleta inteira,
+mexa só nesses dois blocos.
+
+| | Escuro (padrão) | Claro |
+|---|---|---|
+| Fundo / superfície | `#0f1116` / `#171a21` | `#f6f7f9` / `#ffffff` |
+| Texto | `#e6e8ec` | `#1a1f29` |
+| Acento (botões, foco, nav) | `#5b8cff` | `#2b57c9` |
+
+Os seis status do ciclo de vida têm cor própria e constante nos dois temas — verde (Em estoque),
+violeta (Em formatação), ciano (Em uso), âmbar (Em manutenção), laranja (Reservado para descarte)
+e cinza (Descartado) — e cada selo sempre carrega o rótulo escrito, porque cor nunca é o único
+portador de significado. Duas escolhas deliberadas: **Em uso é ciano, não azul**, para não competir
+com o índigo do acento; e **Descartado é cinza, não vermelho**, porque é estado final de arquivo,
+não erro — vermelho fica reservado para ação destrutiva e falha de validação.
+
+Todos os pares de texto/fundo dos dois temas foram verificados em WCAG AA (≥ 4.5:1 para texto).
+O menor par é o selo "Em uso" no tema claro, com 4.80:1.
+
+Decisões de usabilidade que acompanham o visual:
+
+- Erros de validação da API aparecem como lista, com o nome do campo traduzido para o rótulo do
+  formulário ("confirmação do S/N", não `numero_serie_confirmado`).
+- Decisões de aprovação usam um diálogo próprio (`<dialog>`, com Esc e contenção de foco) no lugar
+  do `prompt()` do navegador; rejeição sem justificativa é bloqueada com mensagem visível.
+- Estados vazios explicam o que fazer em seguida; a navegação mostra esqueleto de carregamento.
+- Alvos de toque de 44px e menu rolável no mobile; anel de foco visível em toda a navegação por
+  teclado; animações respeitam `prefers-reduced-motion`.
+
 ## API
 
 Autenticação: `POST /api/auth/login` → `{ token }`; demais rotas usam `Authorization: Bearer <token>`.
@@ -153,7 +190,10 @@ sga-ti/
 │   ├── servico-eventos.js  # registro de eventos, aprovações, integridade, LGPD
 │   ├── n8n.js              # tradução do JSON da seção 10 → eventos internos
 │   └── api.js              # rotas REST + papéis + webhook
-├── public/                 # SPA (login, dashboard, ativos, eventos, aprovações, auditoria)
+├── public/
+│   ├── index.html          # casca + resolução do tema antes da 1ª pintura
+│   ├── styles.css          # design system: tokens dos dois temas e componentes
+│   └── app.js              # telas, diálogo, avisos, controle de tema
 └── test/sga-ti.test.js     # 22 testes das regras não negociáveis
 ```
 

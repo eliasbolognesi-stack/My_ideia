@@ -1,9 +1,21 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-tema="escuro">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>SGA-TI — Gestão de Ativos de TI</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b8cff'/%3E%3Ctext x='16' y='22' font-family='Arial,Helvetica,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%230b1020'%3ETI%3C/text%3E%3C/svg%3E">
+  <script>
+    // Resolve o tema antes da primeira pintura, para não haver flash de tela
+    // clara. Padrão: escuro. "sistema" segue a configuração do dispositivo.
+    (function () {
+      var preferencia = 'escuro';
+      try { preferencia = localStorage.getItem('sga_ti_tema') || 'escuro'; } catch (e) { /* janela privada */ }
+      var claro = preferencia === 'claro' ||
+        (preferencia === 'sistema' && window.matchMedia('(prefers-color-scheme: light)').matches);
+      document.documentElement.dataset.tema = claro ? 'claro' : 'escuro';
+    })();
+  </script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -18,14 +30,24 @@
         <input type="password" name="senha" required autocomplete="current-password">
       </label>
       <button type="submit" class="botao primario">Entrar</button>
-      <p id="erro-login" class="erro" hidden></p>
+      <div id="erro-login" hidden></div>
+      <div class="login-rodape">
+        <label class="seletor-tema">
+          <span>Tema</span>
+          <select data-seletor-tema aria-label="Tema da interface">
+            <option value="escuro">Escuro</option>
+            <option value="claro">Claro</option>
+            <option value="sistema">Sistema</option>
+          </select>
+        </label>
+      </div>
     </form>
   </div>
 
   <div id="app" hidden>
     <aside class="lateral">
-      <div class="marca">SGA-TI</div>
-      <nav id="menu">
+      <div class="marca">SGA-TI<small>Gestão de ativos</small></div>
+      <nav id="menu" aria-label="Navegação principal">
         <button data-tela="dashboard" class="ativo">Visão geral</button>
         <button data-tela="ativos">Ativos</button>
         <button data-tela="registrar">Registrar evento</button>
@@ -35,11 +57,21 @@
       </nav>
       <div class="rodape-lateral">
         <div id="usuario-logado"></div>
+        <label class="seletor-tema">
+          <span>Tema</span>
+          <select data-seletor-tema aria-label="Tema da interface">
+            <option value="escuro">Escuro</option>
+            <option value="claro">Claro</option>
+            <option value="sistema">Sistema</option>
+          </select>
+        </label>
         <button id="botao-sair" class="botao discreto">Sair</button>
       </div>
     </aside>
     <main id="conteudo"></main>
   </div>
+
+  <dialog id="dialogo" class="dialogo"></dialog>
 
   <script src="/app.js"></script>
 </body>
