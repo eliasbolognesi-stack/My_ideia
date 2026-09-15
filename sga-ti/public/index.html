@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SGA-TI — Gestão de Ativos de TI</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="tela-login" hidden>
+    <form id="form-login" class="cartao login">
+      <h1>SGA-TI</h1>
+      <p class="sub">Gestão de Ativos e Estoque de TI</p>
+      <label>E-mail
+        <input type="email" name="email" required autocomplete="username">
+      </label>
+      <label>Senha
+        <input type="password" name="senha" required autocomplete="current-password">
+      </label>
+      <button type="submit" class="botao primario">Entrar</button>
+      <p id="erro-login" class="erro" hidden></p>
+    </form>
+  </div>
+
+  <div id="app" hidden>
+    <aside class="lateral">
+      <div class="marca">SGA-TI</div>
+      <nav id="menu">
+        <button data-tela="dashboard" class="ativo">Visão geral</button>
+        <button data-tela="ativos">Ativos</button>
+        <button data-tela="registrar">Registrar evento</button>
+        <button data-tela="aprovacoes">Aprovações <span id="badge-aprovacoes" class="badge" hidden></span></button>
+        <button data-tela="auditoria">Auditoria</button>
+        <button data-tela="usuarios" id="menu-usuarios" hidden>Usuários</button>
+      </nav>
+      <div class="rodape-lateral">
+        <div id="usuario-logado"></div>
+        <button id="botao-sair" class="botao discreto">Sair</button>
+      </div>
+    </aside>
+    <main id="conteudo"></main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
