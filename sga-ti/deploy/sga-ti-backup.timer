@@ -1,0 +1,16 @@
+[Unit]
+Description=SGA-TI — cópia de segurança diária
+Documentation=file:/opt/sga-ti/OPERACAO.md
+
+[Timer]
+# Todo dia às 02:00, com até 15 minutos de folga para não bater com outras
+# tarefas do servidor no mesmo minuto.
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=15m
+
+# Se o servidor estiver desligado na hora marcada, roda assim que ligar —
+# sem isso, uma máquina que dorme à noite nunca faria cópia.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,68 @@
+[Unit]
+# Serviço do SGA-TI.
+#
+#   sudo cp deploy/sga-ti.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now sga-ti
+#   systemctl status sga-ti
+#
+# Ajuste WorkingDirectory, ExecStart e EnvironmentFile se instalar em outro
+# caminho. Ver DEPLOY.md para o passo a passo completo.
+Description=SGA-TI — Gestão de Ativos e Estoque de TI
+Documentation=file:/opt/sga-ti/README.md
+After=network-online.target
+Wants=network-online.target
+
+# Se reiniciar 5 vezes em 60s, para e deixa o estado em "failed" para o
+# monitoramento perceber, em vez de mascarar um defeito reiniciando para sempre.
+# Fica em [Unit], e não em [Service]: aqui o systemd ignora em silêncio.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=sga-ti
+Group=sga-ti
+WorkingDirectory=/opt/sga-ti
+
+# O arquivo com as variáveis (inclusive as chaves) fica fora do diretório do
+# aplicativo e legível só pelo serviço: chmod 640, dono root:sga-ti.
+EnvironmentFile=/etc/sga-ti/sga-ti.env
+
+# Caminho absoluto do Node — a versão é fixada de propósito, porque o banco usa
+# a API SQLite embutida, ainda marcada como experimental pelo Node. Atualizar o
+# Node sem testar pode quebrar o sistema. Ver .nvmrc e DEPLOY.md.
+ExecStart=/usr/bin/node --no-warnings /opt/sga-ti/server.js
+
+# Volta sozinho de qualquer queda: exceção não tratada, falta de memória,
+# reinício do servidor. É isto que impede o sistema de sumir sem ninguém ver.
+Restart=always
+RestartSec=3
+# Encerramento limpo: o servidor fecha conexões e o banco ao receber SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# --- Restrições de privilégio -----------------------------------------------
+# O processo não precisa de quase nada além de escrever na pasta de dados.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# Única pasta gravável: onde ficam o banco, o registro de segurança e as cópias.
+ReadWritePaths=/var/lib/sga-ti
+
+# --- Registro ---------------------------------------------------------------
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sga-ti
+
+[Install]
+WantedBy=multi-user.target

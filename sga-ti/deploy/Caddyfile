@@ -1,0 +1,43 @@
+# Proxy reverso com HTTPS automático — opção recomendada.
+#
+# O Caddy resolve o certificado sozinho (Let's Encrypt), renova sozinho e
+# redireciona http para https sem configuração extra. Para um sistema interno
+# de time pequeno, é o caminho com menos peça para dar errado.
+#
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Troque o endereço abaixo pelo domínio real. Ele precisa apontar para este
+# servidor ANTES do primeiro início, senão a emissão do certificado falha.
+
+sga-ti.suaempresa.com {
+    # O SGA-TI escuta só em localhost; quem fala com a internet é o Caddy.
+    reverse_proxy 127.0.0.1:3000
+
+    # Compressão para a tabela de ativos trafegar leve em rede ruim.
+    encode gzip zstd
+
+    # A aplicação já envia os próprios cabeçalhos de segurança (política de
+    # conteúdo, anti-enquadramento, nosniff). Aqui só se acrescenta o que
+    # depende do TLS, que a aplicação não tem como saber sozinha.
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        -Server
+    }
+
+    # Registro de acesso separado, útil para investigar incidente junto com o
+    # registro de segurança da aplicação.
+    log {
+        output file /var/log/caddy/sga-ti.log {
+            roll_size 10MiB
+            roll_keep 5
+        }
+    }
+}
+
+# Se o sistema for só para a rede interna, troque o bloco acima por:
+#
+# sga-ti.interno.suaempresa.com {
+#     tls /caminho/certificado.pem /caminho/chave.pem
+#     reverse_proxy 127.0.0.1:3000
+# }

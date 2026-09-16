@@ -107,11 +107,12 @@ const CHAVE_ESTOQUE = 'chave-do-estoque-para-teste';
 
 function subirServidor(extras = {}) {
   const pasta = fs.mkdtempSync(path.join(os.tmpdir(), 'sga-ti-teste-'));
-  const porta = 3400 + Math.floor(Math.random() * 500);
+  // PORT=0: quem escolhe a porta é o sistema, e o endereço real é lido da
+  // linha de subida. Sortear número colide de vez em quando entre os testes.
   const filho = spawn(process.execPath, ['--no-warnings', path.join(__dirname, '..', 'server.js')], {
     env: {
       ...process.env,
-      PORT: String(porta),
+      PORT: '0',
       SGA_TI_DB: path.join(pasta, 'teste.db'),
       SGA_TI_LOG_SEGURANCA: path.join(pasta, 'seguranca.log'),
       SGA_TI_ADMIN_SENHA: SENHA_ADMIN,
@@ -121,10 +122,16 @@ function subirServidor(extras = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
+  let base = '';
+  let saida = '';
   const pronto = new Promise((resolver, rejeitar) => {
-    const prazo = setTimeout(() => rejeitar(new Error('servidor não subiu a tempo')), 10000);
+    const prazo = setTimeout(() => rejeitar(new Error(`servidor não subiu a tempo:\n${saida}`)), 10000);
     filho.stdout.on('data', (dado) => {
-      if (String(dado).includes('SGA-TI no ar')) {
+      // Acumula: o anúncio pode chegar partido em dois pedaços.
+      saida += String(dado);
+      const anuncio = saida.match(/SGA-TI no ar: (http:\/\/\S+)/);
+      if (anuncio) {
+        base = anuncio[1];
         clearTimeout(prazo);
         resolver();
       }
@@ -132,7 +139,7 @@ function subirServidor(extras = {}) {
     filho.on('error', rejeitar);
   });
 
-  return { filho, pasta, base: `http://127.0.0.1:${porta}`, pronto };
+  return { filho, pasta, get base() { return base; }, pronto };
 }
 
 async function pedir(base, caminho, opcoes = {}) {

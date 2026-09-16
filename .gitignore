@@ -1,0 +1,21 @@
+# Segredos — nunca versionar.
+# O sga-ti/.gitignore já protege a pasta do sistema; este aqui fecha a raiz,
+# que é onde costuma cair o .env de quem segue só o README de cima.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+segredos/
+
+# Sistema operacional e editores
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Dependências e artefatos
+node_modules/
+*.log

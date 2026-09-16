@@ -1,6 +1,6 @@
 {
   "name": "sga-ti",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "Sistema de Gestão de Ativos e Estoque de TI (SGA-TI) — ciclo de vida de equipamentos com trilha de auditoria imutável",
   "private": true,
   "license": "MIT",

@@ -23,7 +23,9 @@ const { DatabaseSync } = require('node:sqlite');
 const config = require('../src/config');
 
 const destino = process.argv[2] || path.join(path.dirname(config.caminhoBanco), 'backups');
-const manterDias = Number(process.env.SGA_TI_BACKUP_MANTER_DIAS || 30);
+// Valor escrito errado cairia em NaN e NENHUMA cópia antiga seria removida —
+// o disco encheria em silêncio. O ajudante do config recusa e avisa.
+const manterDias = config.numero(process.env.SGA_TI_BACKUP_MANTER_DIAS, 30, { minimo: 1 });
 const PREFIXO = 'sga-ti-';
 
 function carimbo() {

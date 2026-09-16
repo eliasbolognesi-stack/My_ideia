@@ -10,6 +10,7 @@ const { criarLimitador } = require('./limite');
 const { seguranca, resumirSegredo } = require('./registro');
 const { limparProfundo } = require('./entrada');
 const { ErroDeValidacao } = servico;
+const { version: VERSAO } = require('../package.json');
 
 class ErroHttp extends Error {
   constructor(status, mensagem) {
@@ -96,6 +97,25 @@ function autorizarWebhook(chaveRecebida) {
 // ---------------------------------------------------------------------------
 // Rotas
 // ---------------------------------------------------------------------------
+
+// Saúde: rota pública e barata, para monitor de uptime e proxy reverso
+// perguntarem "está vivo?". Não expõe nada sensível — só confirma que o
+// processo responde e que o banco abre.
+rota('GET', '/api/saude', { publica: true }, ({ db }) => {
+  let banco = 'ok';
+  try {
+    db.prepare('SELECT 1').get();
+  } catch {
+    banco = 'indisponivel';
+  }
+  return {
+    ok: banco === 'ok',
+    versao: VERSAO,
+    banco,
+    manutencao: config.manutencao,
+    momento: new Date().toISOString(),
+  };
+});
 
 rota('POST', '/api/auth/login', { publica: true }, ({ db, corpo, ip }) => {
   // O limite pune tentativa ERRADA, não uso normal: um escritório inteiro

@@ -1,0 +1,72 @@
+# Roda a suíte de testes a cada push e a cada pull request.
+#
+# Sem isto, os testes só rodam se alguém lembrar — e é justamente no dia corrido
+# que ninguém lembra. Aqui eles rodam sozinhos e o resultado aparece no commit.
+#
+# Não há `npm install`: o sistema tem zero dependências externas. O passo de
+# instalação existiria só para não ter nada para instalar.
+
+name: Testes
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  testes:
+    name: node:test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: sga-ti
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # A versão vem do .nvmrc, o mesmo arquivo que o servidor usa. Assim o que
+      # passa aqui é o que roda em produção — o banco usa a API SQLite embutida
+      # do Node, ainda experimental, e ela muda entre versões.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: sga-ti/.nvmrc
+
+      - name: Versão do Node
+        run: node --version
+
+      - name: Suíte de testes
+        run: npm test
+
+      # Um teste que só passa em silêncio esconde regressão de segurança: se o
+      # HTML voltar a ter script embutido, a política de conteúdo estrita quebra
+      # a interface inteira no navegador, e nenhum teste unitário acusaria.
+      - name: Nenhum script embutido no HTML
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const embutido = /<script(?![^>]*\ssrc=)[^>]*>[\s\S]*?\S[\s\S]*?<\/script>/;
+            const culpados = fs.readdirSync("public")
+              .filter((a) => a.endsWith(".html"))
+              .filter((a) => embutido.test(fs.readFileSync(`public/${a}`, "utf8")));
+            if (culpados.length) {
+              console.error(`::error::script embutido em: ${culpados.join(", ")}`);
+              process.exit(1);
+            }
+            console.log("ok: todo script vem de arquivo proprio");
+          '
+
+      # O .env.example é modelo, não cofre. Se alguém colar uma chave de verdade
+      # ali, ela entra no histórico do repositório para sempre.
+      - name: Nenhum segredo no .env.example
+        run: |
+          if grep -nE '^[A-Z_]+=.*[A-Fa-f0-9]{32,}' .env.example; then
+            echo "::error::.env.example parece conter um segredo de verdade."
+            exit 1
+          fi
+          echo "ok: o modelo não tem segredo"

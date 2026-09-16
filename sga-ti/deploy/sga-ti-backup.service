@@ -1,0 +1,33 @@
+[Unit]
+# Cópia de segurança do banco. Disparado pelo sga-ti-backup.timer.
+#
+#   sudo cp deploy/sga-ti-backup.* /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now sga-ti-backup.timer
+#   systemctl list-timers sga-ti-backup
+Description=SGA-TI — cópia de segurança do banco
+Documentation=file:/opt/sga-ti/OPERACAO.md
+
+[Service]
+Type=oneshot
+User=sga-ti
+Group=sga-ti
+WorkingDirectory=/opt/sga-ti
+EnvironmentFile=/etc/sga-ti/sga-ti.env
+
+# O destino é a pasta local; a cópia para FORA do servidor é o passo seguinte
+# (ver DEPLOY.md). Cópia no mesmo disco não protege contra perda do disco.
+ExecStart=/usr/bin/node --no-warnings /opt/sga-ti/scripts/backup.js /var/lib/sga-ti/backups
+
+# Envia para fora do servidor logo depois. Descomente e ajuste ao seu destino.
+# ExecStartPost=/usr/bin/rsync -a --delete /var/lib/sga-ti/backups/ backup@servidor:/backups/sga-ti/
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sga-ti
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sga-ti-backup

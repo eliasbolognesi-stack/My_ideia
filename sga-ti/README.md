@@ -32,6 +32,8 @@ aba **Usuários**.
 | `SGA_TI_WEBHOOK_KEYS` | *(vazia)* | `chave:email,chave2:email2` — **a chave define o autor** do evento |
 | `SGA_TI_WEBHOOK_KEY` | *(vazia)* | Modo legado (chave única, autor declarado no corpo). Só para transição |
 | `SGA_TI_LOG_SEGURANCA` | `data/seguranca.log` | Registro de eventos de segurança, separado do banco |
+| `SGA_TI_LOG_TAMANHO_MB` | `5` | Tamanho em que o registro é partido em arquivo novo |
+| `SGA_TI_LOG_ARQUIVOS` | `5` | Quantos arquivos anteriores são guardados |
 | `SGA_TI_ATRAS_PROXY` | `false` | Aceita `X-Forwarded-For`. **Ligue só atrás de proxy reverso** |
 | `SGA_TI_FORCAR_HTTPS` | `false` | Envia `Strict-Transport-Security` (ligue quando servido por HTTPS) |
 | `SGA_TI_MANUTENCAO` | `false` | Responde 503 em tudo, sem derrubar o processo |
@@ -44,6 +46,11 @@ aba **Usuários**.
 | `SGA_TI_PRAZO_RETENCAO_ANOS` | `5` | Prazo de retenção antes da anonimização LGPD |
 | `SGA_TI_EMPRESA` | `Empresa` | Nome exibido |
 | `SGA_TI_SESSAO_HORAS` | `12` | Validade da sessão de login |
+| `SGA_TI_CONTATO_DPO` | *(vazia)* | Canal do titular dos dados, exigido pela LGPD |
+| `NODE_ENV` | *(vazia)* | Em `production`, o boot **recusa** subir com configuração perigosa |
+
+Todas com explicação e exemplo em [`.env.example`](.env.example) — comece por ele, e nunca
+versione o `.env` de verdade.
 
 ## O que o sistema garante (mapeado ao prompt)
 
@@ -174,6 +181,11 @@ sga-ti.suaempresa.com {
 
 E no serviço: `SGA_TI_ATRAS_PROXY=1 SGA_TI_FORCAR_HTTPS=1 node server.js`
 
+Os arquivos prontos estão em [`deploy/`](deploy/) — [`Caddyfile`](deploy/Caddyfile) e
+[`nginx.conf`](deploy/nginx.conf). Com `NODE_ENV=production`, o sistema **se recusa a subir** se
+essa combinação estiver errada (proxy ligado com escuta aberta para a internet, ou senha
+trafegando sem HTTPS) e diz o que corrigir.
+
 ### Cópia de segurança
 
 ```bash
@@ -181,8 +193,9 @@ npm run backup                         # grava em data/backups/
 npm run backup -- /mnt/backup          # grava onde você indicar
 ```
 
-Usa `VACUUM INTO` (cópia consistente com o sistema no ar) e confere a cópia logo depois. Agende
-diariamente e **guarde uma cópia fora deste servidor**. Procedimentos de emergência, restauração e
+Usa `VACUUM INTO` (cópia consistente com o sistema no ar) e confere a cópia logo depois. O
+agendamento diário já vem pronto em [`deploy/sga-ti-backup.timer`](deploy/sga-ti-backup.timer);
+**guarde uma cópia fora deste servidor** (linha `ExecStartPost` do `.service`). Procedimentos de emergência, restauração e
 resposta a incidente estão em [`OPERACAO.md`](OPERACAO.md).
 
 ### Privacidade
@@ -197,6 +210,7 @@ Autenticação: `POST /api/auth/login` → `{ token }`; demais rotas usam `Autho
 
 | Método e rota | Descrição |
 |---|---|
+| `GET /api/saude` | **Pública.** Responde 200 com a versão e se o banco abre — para monitor de uptime |
 | `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/me` | Sessão |
 | `GET /api/dashboard` | Contagens por status, pendências, últimos eventos |
 | `GET /api/ativos?status=&q=` | Lista/busca de ativos |
@@ -286,7 +300,16 @@ sga-ti/
 │   ├── servico-eventos.js  # registro de eventos, aprovações, integridade, LGPD
 │   ├── n8n.js              # tradução do JSON da seção 10 → eventos internos
 │   └── api.js              # rotas REST + papéis + webhook
+├── DEPLOY.md               # primeiro deploy, atualização e plano de reversão
+├── CHANGELOG.md            # o que mudou em cada versão (leia antes de atualizar)
 ├── OPERACAO.md             # desligar, restaurar e responder a incidente
+├── .env.example            # modelo das variáveis, sem segredo
+├── .nvmrc                  # versão do Node fixada (SQLite embutido é experimental)
+├── deploy/
+│   ├── sga-ti.service      # systemd: reinício automático, usuário e disco restritos
+│   ├── sga-ti-backup.*     # cópia diária (service + timer)
+│   ├── Caddyfile           # proxy com TLS automático (recomendado)
+│   └── nginx.conf          # alternativa com certbot
 ├── scripts/backup.js       # cópia de segurança (VACUUM INTO) + verificação
 ├── public/
 │   ├── index.html          # casca da aplicação
@@ -295,14 +318,20 @@ sga-ti/
 │   ├── styles.css          # design system: tokens dos dois temas e componentes
 │   └── app.js              # telas, diálogo, avisos, controle de tema
 └── test/
-    ├── sga-ti.test.js      # 27 testes das regras não negociáveis
-    └── seguranca.test.js   # 19 testes das proteções (incl. servidor real por HTTP)
+    ├── sga-ti.test.js      # 22 testes das regras não negociáveis
+    ├── seguranca.test.js   # 24 testes das proteções (incl. servidor real por HTTP)
+    └── deploy.test.js      # 13 testes de saúde, rotação e recusa no boot
 ```
 
 ## Antes de publicar
 
+O passo a passo completo — instalar, configurar, ligar o serviço, monitorar e **reverter** — está
+em [`DEPLOY.md`](DEPLOY.md). Este é o resumo do que depende de uma decisão sua:
+
 - [ ] Subir atrás de proxy reverso com TLS e ligar `SGA_TI_ATRAS_PROXY=1 SGA_TI_FORCAR_HTTPS=1`.
-- [ ] Agendar `npm run backup` diariamente, com destino **fora deste servidor**, e testar a
+- [ ] Manter o processo no ar com [`deploy/sga-ti.service`](deploy/sga-ti.service) e apontar um
+      monitor de uptime para `GET /api/saude`.
+- [ ] Ligar o timer de cópia de segurança, com destino **fora deste servidor**, e testar a
       restauração uma vez.
 - [ ] Encaminhar `data/seguranca.log` para fora do servidor e ligar o alerta descrito em
       [`OPERACAO.md`](OPERACAO.md#3-registro-de-segurança).
@@ -311,6 +340,11 @@ sga-ti/
 - [ ] Preencher o contato do DPO em `public/privacidade.html` e os responsáveis em `OPERACAO.md`.
 - [ ] Trocar a senha do admin inicial e cadastrar as pessoas com o papel mínimo necessário.
 - [ ] Definir `SGA_TI_DOMINIOS_EVIDENCIA` com o domínio onde ficam os termos de baixa.
+- [ ] Fixar a versão do Node no servidor (`apt-mark hold nodejs`) — ver [`.nvmrc`](.nvmrc).
+
+**Limitações conhecidas:** o sistema só funciona na raiz de um domínio (`sga-ti.empresa.com`), não
+em subcaminho; e não há sistema de migração — o esquema é criado na primeira subida, então a
+primeira alteração de coluna com dados em produção precisa de um plano à parte.
 
 ## Próximos passos sugeridos
 
@@ -318,3 +352,6 @@ sga-ti/
 - Exportação CSV da auditoria e relatório periódico por e-mail via n8n.
 - SSO corporativo (OIDC) no lugar do login local, mantendo os papéis.
 - Criptografia do banco em repouso (LGPD art. 46) — hoje depende do disco do servidor.
+- Sistema de migração (`PRAGMA user_version` + migrações numeradas), **antes** da primeira mudança
+  de esquema com dados em produção.
+- Servir em subcaminho, trocando os caminhos absolutos do HTML por relativos.

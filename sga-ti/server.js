@@ -10,6 +10,76 @@ const { garantirAdminInicial } = require('./src/auth');
 const { despachar, ErroHttp, ErroDeValidacao } = require('./src/api');
 const { seguranca } = require('./src/registro');
 
+// ---------------------------------------------------------------------------
+// Validação da configuração
+//
+// Em produção (NODE_ENV=production) uma combinação perigosa IMPEDE a subida,
+// em vez de virar um aviso que ninguém lê no meio do log. Fora de produção,
+// os mesmos pontos aparecem como aviso, para não atrapalhar o dia a dia.
+// ---------------------------------------------------------------------------
+function validarConfiguracao() {
+  const erros = [];
+  const avisos = [];
+
+  if (!config.chavesWebhook.size && config.chaveWebhook) {
+    erros.push({
+      titulo: 'Webhook em modo legado (SGA_TI_WEBHOOK_KEY).',
+      detalhe: 'Quem tiver a chave registra evento em nome de qualquer pessoa. Migre para '
+        + 'SGA_TI_WEBHOOK_KEYS="chave:email", em que a chave define o autor.',
+    });
+  }
+
+  const escutaExterna = config.host !== '127.0.0.1' && config.host !== 'localhost';
+  if (escutaExterna && !config.forcarHttps) {
+    erros.push({
+      titulo: `Escutando em ${config.host} sem HTTPS.`,
+      detalhe: 'Senha e credencial de sessão trafegariam abertas. Publique atrás de proxy reverso '
+        + 'com TLS (SGA_TI_HOST=127.0.0.1) ou ligue SGA_TI_FORCAR_HTTPS.',
+    });
+  }
+  if (escutaExterna && config.atrasDeProxy) {
+    erros.push({
+      titulo: `SGA_TI_ATRAS_PROXY ligado com escuta em ${config.host}.`,
+      detalhe: 'Quem alcançar a porta direto forja o próprio endereço e escapa do limite de '
+        + 'tentativas. Escute em 127.0.0.1 e deixe o proxy na frente.',
+    });
+  }
+
+  if (!config.contatoDpo) {
+    avisos.push('SGA_TI_CONTATO_DPO vazio: a LGPD exige um canal para o titular dos dados.');
+  }
+  if (!config.dominiosEvidencia.length) {
+    avisos.push('SGA_TI_DOMINIOS_EVIDENCIA vazio: a evidência de descarte aceita link de qualquer domínio https.');
+  }
+  if (!config.chavesWebhook.size && !config.chaveWebhook) {
+    avisos.push('Nenhuma chave de webhook: a entrada automática do n8n fica desabilitada.');
+  }
+
+  for (const aviso of avisos) console.warn(`AVISO: ${aviso}`);
+
+  if (!erros.length) return;
+
+  const traco = '='.repeat(70);
+  console.error('');
+  console.error(traco);
+  console.error(config.producao
+    ? 'CONFIGURACAO RECUSADA - o SGA-TI nao sobe com estes pontos em aberto:'
+    : 'CONFIGURACAO PERIGOSA - com NODE_ENV=production isto impediria a subida:');
+  for (const erro of erros) {
+    console.error('');
+    console.error(`  * ${erro.titulo}`);
+    console.error(`    ${erro.detalhe}`);
+  }
+  console.error('');
+  console.error('  Consulte .env.example e DEPLOY.md.');
+  console.error(traco);
+  console.error('');
+
+  if (config.producao) process.exit(1);
+}
+
+validarConfiguracao();
+
 const db = abrirBanco(config.caminhoBanco);
 
 const credenciais = garantirAdminInicial(db, config.senhaAdminInicial);
@@ -172,7 +242,10 @@ process.on('SIGTERM', () => encerrar('SIGTERM'));
 process.on('SIGINT', () => encerrar('SIGINT'));
 
 servidor.listen(config.porta, config.host, () => {
-  console.log(`SGA-TI no ar: http://${config.host}:${config.porta}`);
+  // A porta vem do socket, e não da configuração: com PORT=0 (porta escolhida
+  // pelo sistema) a configuração diria "0", que não serve para ninguém.
+  const { port: portaReal } = servidor.address();
+  console.log(`SGA-TI no ar: http://${config.host}:${portaReal}`);
   console.log(`Banco de dados: ${config.caminhoBanco}`);
   console.log(`Registro de segurança: ${config.arquivoRegistroSeguranca}`);
 
@@ -187,10 +260,5 @@ servidor.listen(config.porta, config.host, () => {
     console.warn('       SGA_TI_WEBHOOK_KEYS="chave:email" para a chave definir o autor.');
   } else {
     console.log('Webhook n8n: desabilitado (defina SGA_TI_WEBHOOK_KEYS)');
-  }
-  if (config.host === '0.0.0.0' && !config.forcarHttps) {
-    console.warn('AVISO: escutando em todas as interfaces sem HTTPS. Publique somente atrás de');
-    console.warn('       um proxy reverso com TLS (ver README) — senha e credencial de sessão');
-    console.warn('       trafegam abertas em conexão HTTP.');
   }
 });
