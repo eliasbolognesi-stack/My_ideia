@@ -1,5 +1,6 @@
 'use strict';
 
+const config = require('./config');
 const { emTransacao } = require('./db');
 const { hashEvento } = require('./hash');
 const { STATUS, VALIDADORES, efeitoDoEvento, vazio } = require('./regras');
@@ -179,7 +180,10 @@ function registrarEvento(db, tipo, dados, autor, { viaAprovacao = false } = {}) 
   }
 
   // Seção 13: descarte de equipamento 'Em uso' vai para aprovação humana.
-  if (tipo === 'Descarte' && ativo.status_atual === STATUS.EM_USO && !viaAprovacao) {
+  // Com SGA_TI_APROVACAO_TODO_DESCARTE ligado, qualquer descarte passa por
+  // aprovação — inclusive o de ativo que já estava em estoque.
+  const exigeAprovacao = ativo.status_atual === STATUS.EM_USO || config.aprovacaoTodoDescarte;
+  if (tipo === 'Descarte' && exigeAprovacao && !viaAprovacao) {
     const resultado = db
       .prepare(
         `INSERT INTO aprovacoes (ativo_id, payload, solicitante_id, solicitante_nome)
@@ -189,7 +193,9 @@ function registrarEvento(db, tipo, dados, autor, { viaAprovacao = false } = {}) 
     return {
       aprovacao_pendente: true,
       aprovacao_id: Number(resultado.lastInsertRowid),
-      mensagem: `ativo ${ativo.patrimonio} consta como 'Em uso': o descarte foi encaminhado para aprovação humana`,
+      mensagem: ativo.status_atual === STATUS.EM_USO
+        ? `ativo ${ativo.patrimonio} consta como 'Em uso': o descarte foi encaminhado para aprovação humana`
+        : `descarte do ativo ${ativo.patrimonio} encaminhado para aprovação humana`,
     };
   }
 

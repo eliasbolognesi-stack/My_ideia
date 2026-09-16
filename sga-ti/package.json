@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node --no-warnings server.js",
     "dev": "node --no-warnings --watch server.js",
-    "test": "node --no-warnings --test"
+    "test": "node --no-warnings --test",
+    "backup": "node --no-warnings scripts/backup.js"
   }
 }

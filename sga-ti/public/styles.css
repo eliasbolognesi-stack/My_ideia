@@ -188,6 +188,25 @@ p:last-child { margin-bottom: 0; }
 }
 .login .sub { margin: var(--e1) 0 var(--e5); }
 .login .botao { width: 100%; margin-top: var(--e1); }
+.aviso-privacidade {
+  margin: var(--e4) 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--texto-fraco);
+}
+.aviso-privacidade a { color: var(--texto-suave); }
+
+/* Páginas de texto corrido (aviso de privacidade) */
+.pagina-texto {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--e6) var(--e4);
+}
+.pagina-texto h1 { font-size: 22px; margin: 0 0 var(--e1); }
+.pagina-texto h2 { font-size: 16px; margin: 0 0 var(--e2); }
+.pagina-texto .sub { margin-bottom: var(--e5); }
+.pagina-texto .cartao p:last-child { margin-bottom: 0; }
+
 .login-rodape {
   margin-top: var(--e5);
   padding-top: var(--e4);
@@ -514,6 +533,9 @@ tr.clicavel:hover { background: var(--superficie-2); }
    Indicadores do painel
    ========================================================================== */
 
+.grade-indicadores.afastada { margin-top: var(--e4); }
+.barra-acoes.justa { margin: 0; }
+
 .grade-indicadores {
   display: grid;
   /* Seis status do ciclo de vida em uma linha, na ordem em que acontecem.
@@ -657,6 +679,8 @@ tr.clicavel:hover { background: var(--superficie-2); }
   margin-bottom: var(--e3);
 }
 .esqueleto.alto { height: 68px; }
+.esqueleto.media { width: 70%; }
+.esqueleto.curta { width: 45%; }
 .esqueleto.titulo { height: 20px; width: 200px; margin-bottom: var(--e4); }
 @keyframes brilho {
   0% { background-position: 100% 50%; }

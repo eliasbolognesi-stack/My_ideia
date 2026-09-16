@@ -4,6 +4,8 @@
 // sistema. Nenhuma função aqui grava nada: recebem dados e devolvem a lista
 // de erros (vazia = evento válido) ou o novo estado calculado do ativo.
 
+const { validarEvidencia } = require('./entrada');
+
 const STATUS = {
   EM_ESTOQUE: 'Em estoque',
   EM_FORMATACAO: 'Em formatação',
@@ -64,6 +66,14 @@ function validarManutencao(dados) {
 function validarDescarte(dados, ativo) {
   const erros = [];
   exigir(dados, ['motivo', 'aprovador', 'evidencia'], erros);
+
+  // Evidência pode ser nº de termo, nome de arquivo ou link. Sendo link, só
+  // https e, se configurado, só domínio da empresa — para a trilha não virar
+  // ponte para um endereço de fora.
+  if (!vazio(dados.evidencia)) {
+    const erroEvidencia = validarEvidencia(dados.evidencia);
+    if (erroEvidencia) erros.push(erroEvidencia);
+  }
 
   // Seção 6/13: nunca descartar sem patrimônio e S/N preenchidos E conferidos.
   // A conferência exige redigitar os dois valores, que precisam bater com o

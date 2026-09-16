@@ -169,8 +169,8 @@ function blocoVazio(titulo, texto, acao) {
 const ESQUELETO = `<div class="esqueleto titulo"></div>
   <div class="cartao">
     <div class="esqueleto alto"></div>
-    <div class="esqueleto" style="width:70%"></div>
-    <div class="esqueleto" style="width:45%"></div>
+    <div class="esqueleto media"></div>
+    <div class="esqueleto curta"></div>
   </div>`;
 
 function selo(status) {
@@ -364,7 +364,7 @@ async function telaDashboard() {
   $('#conteudo').innerHTML = `
     <h2>Visão geral</h2>
     ${pendencias}
-    <div class="grade-indicadores" style="margin-top:var(--e4)">${indicadores}</div>
+    <div class="grade-indicadores afastada">${indicadores}</div>
     <div class="cartao">
       <h3>Últimos eventos</h3>
       ${linhas ? `<div class="rolagem-tabela">
@@ -642,7 +642,7 @@ async function telaAprovacoes() {
       <td>${escapar(ap.payload.motivo || '—')}</td>
       <td>${escapar(ap.solicitante_nome)}<br><small>${formatarData(ap.criado_em)}</small></td>
       <td>${podeDecidir ? `
-        <div class="barra-acoes" style="margin:0">
+        <div class="barra-acoes justa">
           <button class="botao primario pequeno" data-decisao="aprovado" data-id="${ap.id}" data-patrimonio="${escapar(ap.patrimonio)}">Aprovar</button>
           <button class="botao perigo pequeno" data-decisao="rejeitado" data-id="${ap.id}" data-patrimonio="${escapar(ap.patrimonio)}">Rejeitar</button>
         </div>` : '<small>aguardando aprovador</small>'}
@@ -704,7 +704,8 @@ async function telaAuditoria(filtros = {}) {
   const parametros = new URLSearchParams();
   if (filtros.colaborador) parametros.set('colaborador', filtros.colaborador);
   if (filtros.tipo) parametros.set('tipo', filtros.tipo);
-  const { eventos } = await api(`/api/auditoria/eventos?${parametros}`);
+  const { eventos, escopo, colaborador } = await api(`/api/auditoria/eventos?${parametros}`);
+  const apenasProprio = escopo === 'proprio';
 
   const tipos = ['', 'Recebimento', 'Formatacao', 'Movimentacao', 'Manutencao', 'Descarte', 'Retificacao'];
   const linhas = eventos.map((e) => `
@@ -721,8 +722,10 @@ async function telaAuditoria(filtros = {}) {
     <h2>Auditoria</h2>
     <p class="sub">Consulta do histórico por colaborador (LGPD, art. 18) ou por tipo de evento.
        Nenhum registro pode ser editado ou apagado — correções aparecem como Retificação.</p>
+    ${apenasProprio ? htmlAviso('info',
+      `Seu papel dá acesso apenas ao seu próprio histórico (${colaborador}). A consulta ampla, que mostra a atuação de todos os colaboradores, é restrita a aprovador e administrador.`) : ''}
     <div class="barra-acoes">
-      <input id="filtro-colaborador" class="busca" placeholder="Nome do colaborador…" value="${escapar(filtros.colaborador || '')}">
+      <input id="filtro-colaborador" class="busca" placeholder="Nome do colaborador…" value="${escapar(filtros.colaborador || '')}" ${apenasProprio ? 'disabled' : ''}>
       <select id="filtro-tipo">${tipos.map((t) => `<option value="${t}" ${filtros.tipo === t ? 'selected' : ''}>${t ? escapar(rotuloEvento(t)) : 'Todos os eventos'}</option>`).join('')}</select>
       <button class="botao" id="botao-auditar">Consultar</button>
     </div>
@@ -736,7 +739,7 @@ async function telaAuditoria(filtros = {}) {
     </div>`;
 
   const consultar = () => telaAuditoria({
-    colaborador: $('#filtro-colaborador').value.trim(),
+    colaborador: apenasProprio ? '' : $('#filtro-colaborador').value.trim(),
     tipo: $('#filtro-tipo').value,
   });
   $('#botao-auditar').addEventListener('click', consultar);

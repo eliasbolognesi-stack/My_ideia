@@ -8,6 +8,7 @@ const config = require('./src/config');
 const { abrirBanco } = require('./src/db');
 const { garantirAdminInicial } = require('./src/auth');
 const { despachar, ErroHttp, ErroDeValidacao } = require('./src/api');
+const { seguranca } = require('./src/registro');
 
 const db = abrirBanco(config.caminhoBanco);
 
@@ -30,16 +31,52 @@ const TIPOS_MIME = {
   '.ico': 'image/x-icon',
 };
 
+// Cabeçalhos de segurança aplicados a TODA resposta.
+// A política de conteúdo é estrita: só carrega script, estilo e imagem da
+// própria origem (mais `data:` para o ícone embutido), e proíbe que a página
+// seja carregada dentro de outro site — o golpe em que o funcionário clica
+// num botão invisível achando que está em outro lugar.
+const CABECALHOS_SEGURANCA = {
+  'Content-Security-Policy': [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "form-action 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+  ].join('; '),
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+};
+
+function cabecalhos(extras = {}) {
+  const saida = { ...CABECALHOS_SEGURANCA, ...extras };
+  if (config.forcarHttps) {
+    saida['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
+  }
+  return saida;
+}
+
 function responderJson(res, status, corpo) {
-  const texto = JSON.stringify(corpo);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(texto);
+  res.writeHead(status, cabecalhos({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+  }));
+  res.end(JSON.stringify(corpo));
 }
 
 function servirEstatico(req, res, url) {
   const caminhoPedido = url.pathname === '/' ? '/index.html' : url.pathname;
   const caminho = path.normalize(path.join(DIRETORIO_PUBLICO, caminhoPedido));
   if (!caminho.startsWith(DIRETORIO_PUBLICO + path.sep) && caminho !== DIRETORIO_PUBLICO) {
+    seguranca('caminho_suspeito', { caminho: caminhoPedido.slice(0, 200) });
     responderJson(res, 403, { erro: 'caminho inválido' });
     return;
   }
@@ -48,7 +85,9 @@ function servirEstatico(req, res, url) {
       responderJson(res, 404, { erro: 'não encontrado' });
       return;
     }
-    res.writeHead(200, { 'Content-Type': TIPOS_MIME[path.extname(caminho)] || 'application/octet-stream' });
+    res.writeHead(200, cabecalhos({
+      'Content-Type': TIPOS_MIME[path.extname(caminho)] || 'application/octet-stream',
+    }));
     res.end(conteudo);
   });
 }
@@ -78,9 +117,27 @@ function lerCorpo(req) {
   });
 }
 
+const PAGINA_MANUTENCAO = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>SGA-TI — em manutenção</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1116;color:#e6e8ec;
+font:16px/1.5 -apple-system,"Segoe UI",Roboto,Arial,sans-serif;text-align:center;padding:24px}
+h1{color:#5b8cff;font-size:20px;letter-spacing:2px;margin:0 0 8px}p{color:#9aa3b2;margin:0}</style>
+</head><body><div><h1>SGA-TI</h1><p>Sistema em manutenção. Tente novamente em alguns minutos.</p></div></body></html>`;
+
 const servidor = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   try {
+    // Modo manutenção: recusa tudo sem derrubar o processo nem perder o banco.
+    if (config.manutencao) {
+      if (url.pathname.startsWith('/api/')) {
+        responderJson(res, 503, { erro: 'sistema em manutenção' });
+      } else {
+        res.writeHead(503, cabecalhos({ 'Content-Type': 'text/html; charset=utf-8', 'Retry-After': '300' }));
+        res.end(PAGINA_MANUTENCAO);
+      }
+      return;
+    }
+
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET') throw new ErroHttp(405, 'método não permitido');
       servirEstatico(req, res, url);
@@ -95,14 +152,45 @@ const servidor = http.createServer(async (req, res) => {
     } else if (erro instanceof ErroHttp) {
       responderJson(res, erro.status, { erro: erro.message });
     } else {
+      // O detalhe técnico fica no servidor; o visitante recebe só o genérico.
       console.error(`[erro] ${req.method} ${url.pathname}:`, erro);
       responderJson(res, 500, { erro: 'erro interno' });
     }
   }
 });
 
-servidor.listen(config.porta, () => {
-  console.log(`SGA-TI no ar: http://localhost:${config.porta}`);
+function encerrar(sinal) {
+  console.log(`\n[${sinal}] encerrando o SGA-TI...`);
+  servidor.close(() => {
+    try { db.close(); } catch { /* já fechado */ }
+    process.exit(0);
+  });
+  // Não deixa conexão pendurada segurar o desligamento numa emergência.
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on('SIGTERM', () => encerrar('SIGTERM'));
+process.on('SIGINT', () => encerrar('SIGINT'));
+
+servidor.listen(config.porta, config.host, () => {
+  console.log(`SGA-TI no ar: http://${config.host}:${config.porta}`);
   console.log(`Banco de dados: ${config.caminhoBanco}`);
-  console.log(`Webhook n8n: ${config.chaveWebhook ? 'habilitado (POST /api/webhook/n8n)' : 'desabilitado (defina SGA_TI_WEBHOOK_KEY)'}`);
+  console.log(`Registro de segurança: ${config.arquivoRegistroSeguranca}`);
+
+  if (config.manutencao) {
+    console.log('MODO MANUTENÇÃO ATIVO: todas as requisições recebem 503.');
+  }
+  if (config.chavesWebhook.size) {
+    console.log(`Webhook n8n: habilitado com ${config.chavesWebhook.size} chave(s) por origem`);
+  } else if (config.chaveWebhook) {
+    console.warn('AVISO: webhook em modo legado (SGA_TI_WEBHOOK_KEY). Quem tiver a chave pode');
+    console.warn('       registrar eventos em nome de qualquer usuário. Migre para');
+    console.warn('       SGA_TI_WEBHOOK_KEYS="chave:email" para a chave definir o autor.');
+  } else {
+    console.log('Webhook n8n: desabilitado (defina SGA_TI_WEBHOOK_KEYS)');
+  }
+  if (config.host === '0.0.0.0' && !config.forcarHttps) {
+    console.warn('AVISO: escutando em todas as interfaces sem HTTPS. Publique somente atrás de');
+    console.warn('       um proxy reverso com TLS (ver README) — senha e credencial de sessão');
+    console.warn('       trafegam abertas em conexão HTTP.');
+  }
 });
