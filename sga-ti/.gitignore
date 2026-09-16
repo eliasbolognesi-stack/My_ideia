@@ -6,3 +6,6 @@ data/
 *.db-shm
 .env
 *.log
+# capturas geradas por testes de interface
+*.png
+!public/icone*.png
