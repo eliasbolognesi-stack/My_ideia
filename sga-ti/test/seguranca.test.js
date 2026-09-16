@@ -284,6 +284,26 @@ describe('servidor', () => {
     assert.equal(tentaCriar.status, 403);
   });
 
+  test('curinga digitado na busca não devolve a base inteira', async () => {
+    // "%" e "_" são curingas do banco: digitados por quem procura, precisam
+    // valer como texto literal.
+    const todos = await pedir(servidor.base, '/api/ativos', { cabecalhos: comoAdmin() });
+    assert.ok(todos.corpo.ativos.length > 0, 'há ativos cadastrados para o teste valer');
+
+    const comPorcento = await pedir(servidor.base, '/api/ativos?q=%25', { cabecalhos: comoAdmin() });
+    assert.equal(comPorcento.corpo.ativos.length, 0, '"%" não pode devolver todos');
+
+    const comSublinhado = await pedir(servidor.base, '/api/ativos?q=_', { cabecalhos: comoAdmin() });
+    assert.equal(comSublinhado.corpo.ativos.length, 0, '"_" não pode casar com qualquer caractere');
+
+    // Busca normal segue funcionando, sem diferenciar maiúsculas.
+    const normal = await pedir(servidor.base, '/api/ativos?q=latitude', { cabecalhos: comoAdmin() });
+    assert.ok(normal.corpo.ativos.length > 0, 'busca comum continua encontrando');
+
+    const naAuditoria = await pedir(servidor.base, '/api/auditoria/eventos?colaborador=%25', { cabecalhos: comoAdmin() });
+    assert.equal(naAuditoria.corpo.eventos.length, 0, 'o mesmo vale para a auditoria');
+  });
+
   test('erro inesperado não vaza detalhe técnico', async () => {
     const resposta = await pedir(servidor.base, '/api/ativos/999999', { cabecalhos: comoAdmin() });
     assert.equal(resposta.status, 404);
@@ -321,6 +341,24 @@ describe('limite de tentativas de login', () => {
   after(() => {
     servidor.filho.kill('SIGKILL');
     fs.rmSync(servidor.pasta, { recursive: true, force: true });
+  });
+
+  test('entrar corretamente não consome o limite (escritório atrás de um endereço só)', async () => {
+    // Com o limite em 3, dez entradas corretas seguidas precisam passar: o
+    // limite existe contra tentativa às cegas, não contra uso normal.
+    const certo = { metodo: 'POST', corpo: { email: 'admin@local', senha: SENHA_ADMIN } };
+    for (let i = 0; i < 10; i++) {
+      const r = await pedir(servidor.base, '/api/auth/login', certo);
+      assert.equal(r.status, 200, `entrada ${i + 1} deveria passar`);
+    }
+
+    // E uma entrada bem-sucedida limpa o histórico de falhas daquela origem.
+    const errado = { metodo: 'POST', corpo: { email: 'admin@local', senha: 'errada' } };
+    await pedir(servidor.base, '/api/auth/login', errado);
+    await pedir(servidor.base, '/api/auth/login', errado);
+    assert.equal((await pedir(servidor.base, '/api/auth/login', certo)).status, 200);
+    assert.equal((await pedir(servidor.base, '/api/auth/login', errado)).status, 401,
+      'depois de entrar, a contagem de falhas recomeça');
   });
 
   test('bloqueia o excesso de tentativas e registra o bloqueio', async () => {

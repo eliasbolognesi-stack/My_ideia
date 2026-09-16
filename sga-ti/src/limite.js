@@ -11,6 +11,8 @@
 function criarLimitador({ janelaMs, maximo, nome }) {
   const contadores = new Map();
 
+  // Conta a tentativa e diz se ela cabe na janela. Para limite de vazão
+  // (eventos, webhook), em que toda chamada pesa.
   function permitir(chave) {
     const agora = Date.now();
     const registro = contadores.get(chave);
@@ -20,6 +22,24 @@ function criarLimitador({ janelaMs, maximo, nome }) {
     }
     registro.contagem += 1;
     return registro.contagem <= maximo;
+  }
+
+  // Só consulta, sem contar. Para o login, em que quem pesa é a tentativa
+  // FALHA: um escritório inteiro sai pelo mesmo endereço de rede, e contar
+  // entrada bem-sucedida travaria o time em vez de atrapalhar o atacante.
+  function excedeu(chave) {
+    const registro = contadores.get(chave);
+    return Boolean(registro && Date.now() <= registro.expira && registro.contagem >= maximo);
+  }
+
+  // Marca uma tentativa malsucedida.
+  function registrar(chave) {
+    permitir(chave);
+  }
+
+  // Entrada bem-sucedida limpa o histórico daquela origem.
+  function perdoar(chave) {
+    contadores.delete(chave);
   }
 
   function limpar(agora = Date.now()) {
@@ -34,6 +54,9 @@ function criarLimitador({ janelaMs, maximo, nome }) {
 
   return {
     permitir,
+    excedeu,
+    registrar,
+    perdoar,
     limpar,
     nome,
     get tamanho() { return contadores.size; },

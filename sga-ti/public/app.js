@@ -6,6 +6,11 @@
 const estado = {
   token: null,
   usuario: null,
+  // Para onde voltar depois de entrar de novo (sessão expirada ou primeiro acesso).
+  rotaPretendida: null,
+  // Rascunho do formulário de evento: sobrevive a troca de tela e à expiração
+  // da sessão, para ninguém perder o que digitou.
+  rascunhoEvento: null,
 };
 
 try {
@@ -27,6 +32,9 @@ function formatarData(iso) {
   return d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
+const MSG_SESSAO_EXPIRADA =
+  'Sua sessão expirou por segurança. Entre novamente — você volta para a mesma tela.';
+
 async function api(caminho, opcoes = {}) {
   const cabecalhos = { 'Content-Type': 'application/json' };
   if (estado.token) cabecalhos['Authorization'] = `Bearer ${estado.token}`;
@@ -37,7 +45,9 @@ async function api(caminho, opcoes = {}) {
   });
   const corpo = await resposta.json().catch(() => ({}));
   if (resposta.status === 401 && caminho !== '/api/auth/login') {
-    sair();
+    // Guarda a tela atual para retomar depois de entrar de novo, e explica o
+    // que houve na própria tela de login — antes a pessoa caía lá sem saber.
+    sair({ motivo: MSG_SESSAO_EXPIRADA, lembrarRota: true });
     throw new Error('sessão expirada');
   }
   if (!resposta.ok) {
@@ -244,17 +254,38 @@ function confirmarDialogo({ titulo, texto, rotuloOk = 'Confirmar', perigo = fals
   });
 }
 
+// Impede envio duplicado: desabilita o botão enquanto a ação está em curso e
+// devolve o rótulo original ao terminar.
+async function comBotaoOcupado(botao, rotuloOcupado, acao) {
+  if (!botao) return acao();
+  const rotulo = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = rotuloOcupado;
+  try {
+    return await acao();
+  } finally {
+    botao.disabled = false;
+    botao.textContent = rotulo;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Sessão
 // ---------------------------------------------------------------------------
-function sair() {
-  if (estado.token) api('/api/auth/logout', { metodo: 'POST' }).catch(() => {});
+function sair({ motivo = null, lembrarRota = false } = {}) {
+  if (lembrarRota && location.hash && location.hash !== '#/') estado.rotaPretendida = location.hash;
+  if (estado.token && !lembrarRota) api('/api/auth/logout', { metodo: 'POST' }).catch(() => {});
   estado.token = null;
   estado.usuario = null;
   try { localStorage.removeItem('sga_ti_token'); } catch { /* ok */ }
-  limparAviso('#erro-login');
+
   $('#app').hidden = true;
   $('#tela-login').hidden = false;
+  document.title = 'SGA-TI — Entrar';
+  if (motivo) mostrarAviso('#erro-login', 'alerta', motivo);
+  else limparAviso('#erro-login');
+  const campoEmail = $('#form-login input[name=email]');
+  if (campoEmail) campoEmail.focus();
 }
 
 async function iniciar() {
@@ -267,63 +298,122 @@ async function iniciar() {
       return;
     } catch { /* token inválido: cai para o login */ }
   }
+  // Quem abriu um link direto sem estar autenticado volta para ele ao entrar.
+  if (location.hash && location.hash !== '#/') estado.rotaPretendida = location.hash;
   $('#tela-login').hidden = false;
 }
 
 function entrarNoApp() {
   $('#tela-login').hidden = true;
   $('#app').hidden = false;
+  limparAviso('#erro-login');
   $('#usuario-logado').innerHTML =
     `<strong>${escapar(estado.usuario.nome)}</strong>${escapar(estado.usuario.papel)}`;
   $('#menu-usuarios').hidden = estado.usuario.papel !== 'admin';
-  navegar('dashboard');
+
+  const destino = estado.rotaPretendida;
+  estado.rotaPretendida = null;
+  if (destino && destino !== location.hash) location.hash = destino;
+  else aplicarRota();
 }
 
 $('#form-login').addEventListener('submit', async (evento) => {
   evento.preventDefault();
-  const formulario = new FormData(evento.target);
+  const formulario = evento.target;
   limparAviso('#erro-login');
   try {
-    const sessao = await api('/api/auth/login', {
-      metodo: 'POST',
-      corpo: { email: formulario.get('email'), senha: formulario.get('senha') },
-    });
+    const sessao = await comBotaoOcupado(formulario.querySelector('button[type=submit]'), 'Entrando…', () =>
+      api('/api/auth/login', {
+        metodo: 'POST',
+        corpo: { email: formulario.elements.email.value, senha: formulario.elements.senha.value },
+      }));
     estado.token = sessao.token;
     estado.usuario = sessao.usuario;
     try { localStorage.setItem('sga_ti_token', sessao.token); } catch { /* ok */ }
+    formulario.reset();
     entrarNoApp();
   } catch (erro) {
     mostrarAviso('#erro-login', 'erro', erro.message, erro.detalhes);
+    // Senha digitada errada não fica na tela: limpa e devolve o foco.
+    formulario.elements.senha.value = '';
+    formulario.elements.senha.focus();
   }
 });
 
-$('#botao-sair').addEventListener('click', sair);
+$('#botao-sair').addEventListener('click', () => sair());
 
 // ---------------------------------------------------------------------------
-// Navegação
+// Navegação por endereço
+//
+// Cada tela tem endereço próprio (#/ativos, #/ativos/12, #/registrar?tipo=…).
+// É isso que faz o botão Voltar do navegador funcionar, permite favoritar e
+// mandar o link de um equipamento para um colega, e mantém a tela e os
+// filtros ao recarregar a página.
 // ---------------------------------------------------------------------------
-const TELAS = {
-  dashboard: telaDashboard,
-  ativos: telaAtivos,
-  registrar: telaRegistrar,
-  aprovacoes: telaAprovacoes,
-  auditoria: telaAuditoria,
-  usuarios: telaUsuarios,
+const ROTAS = {
+  painel: { tela: () => telaDashboard(), titulo: 'Visão geral', menu: 'painel' },
+  ativos: { tela: (r) => (r.parametro ? telaDetalheAtivo(r.parametro) : telaAtivos(r)), titulo: 'Ativos', menu: 'ativos' },
+  registrar: { tela: (r) => telaRegistrar(r), titulo: 'Registrar evento', menu: 'registrar' },
+  aprovacoes: { tela: () => telaAprovacoes(), titulo: 'Aprovações', menu: 'aprovacoes' },
+  auditoria: { tela: (r) => telaAuditoria(r), titulo: 'Auditoria', menu: 'auditoria' },
+  usuarios: { tela: () => telaUsuarios(), titulo: 'Usuários', menu: 'usuarios' },
 };
 
-function navegar(nome, argumento) {
-  document.querySelectorAll('#menu button').forEach((b) => b.classList.toggle('ativo', b.dataset.tela === nome));
-  $('#conteudo').innerHTML = ESQUELETO;
-  window.scrollTo({ top: 0 });
-  TELAS[nome](argumento).catch((erro) => {
-    $('#conteudo').innerHTML = `<div class="cartao">${htmlAviso('erro', erro.message, erro.detalhes)}</div>`;
-  });
+function lerRota() {
+  const bruto = location.hash.replace(/^#\/?/, '');
+  const [caminho, consulta] = bruto.split('?');
+  const partes = caminho.split('/').filter(Boolean);
+  const nome = ROTAS[partes[0]] ? partes[0] : 'painel';
+  return { nome, parametro: partes[1] || null, params: new URLSearchParams(consulta || '') };
 }
 
-$('#menu').addEventListener('click', (evento) => {
-  const botao = evento.target.closest('button[data-tela]');
-  if (botao) navegar(botao.dataset.tela);
-});
+// Monta o endereço de uma tela a partir dos filtros, ignorando os vazios.
+function endereco(nome, { parametro = null, filtros = {} } = {}) {
+  const params = new URLSearchParams();
+  for (const [chave, valor] of Object.entries(filtros)) {
+    if (valor !== undefined && valor !== null && String(valor).trim() !== '') params.set(chave, valor);
+  }
+  const consulta = params.toString();
+  return `#/${nome}${parametro ? `/${parametro}` : ''}${consulta ? `?${consulta}` : ''}`;
+}
+
+function irPara(hash) {
+  if (location.hash === hash) aplicarRota();
+  else location.hash = hash;
+}
+
+function aplicarRota() {
+  if (!estado.usuario) return;
+  const rota = lerRota();
+  const config = ROTAS[rota.nome];
+
+  document.querySelectorAll('#menu a[data-tela]').forEach((a) => {
+    const ativo = a.dataset.tela === config.menu;
+    a.classList.toggle('ativo', ativo);
+    if (ativo) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  document.title = `SGA-TI — ${config.titulo}`;
+
+  $('#conteudo').innerHTML = ESQUELETO;
+  window.scrollTo({ top: 0 });
+
+  config.tela(rota)
+    .then(() => {
+      // Leitor de tela e teclado começam do título da tela nova, não do topo.
+      const titulo = $('#conteudo h2');
+      if (titulo) {
+        titulo.setAttribute('tabindex', '-1');
+        titulo.focus({ preventScroll: true });
+      }
+    })
+    .catch((erro) => {
+      if (erro.message === 'sessão expirada') return;
+      $('#conteudo').innerHTML = `<div class="cartao">${htmlAviso('erro', erro.message, erro.detalhes)}</div>`;
+    });
+}
+
+window.addEventListener('hashchange', aplicarRota);
 
 // ---------------------------------------------------------------------------
 // Telas
@@ -336,10 +426,10 @@ async function telaDashboard() {
 
   const indicadores = Object.entries(dados.por_status)
     .map(([status, total]) => `
-      <div class="indicador" data-status="${escapar(status)}">
+      <a class="indicador" data-status="${escapar(status)}" href="${endereco('ativos', { filtros: { status } })}">
         <div class="valor">${total}</div>
         <div class="rotulo">${escapar(status)}</div>
-      </div>`)
+      </a>`)
     .join('');
 
   // Pendência de aprovação é ação, não número: vira um aviso com atalho.
@@ -348,7 +438,7 @@ async function telaDashboard() {
       'alerta',
       `${dados.aprovacoes_pendentes} descarte(s) aguardando aprovação de um responsável.`,
       null,
-      '<button class="botao pequeno" id="ir-aprovacoes">Revisar</button>'
+      `<a class="botao pequeno" href="${endereco('aprovacoes')}">Revisar</a>`
     )
     : '';
 
@@ -356,7 +446,8 @@ async function telaDashboard() {
     <tr>
       <td>${formatarData(e.data_hora)}</td>
       <td>${escapar(rotuloEvento(e.tipo))}</td>
-      <td><strong>${escapar(e.patrimonio)}</strong><br><small>${escapar(e.modelo)}</small></td>
+      <td><a href="${endereco('auditoria', { filtros: { tipo: e.tipo } })}" hidden></a>
+        <strong>${escapar(e.patrimonio)}</strong><br><small>${escapar(e.modelo)}</small></td>
       <td>${escapar(e.autor_nome)}</td>
       <td>${transicao(e.status_anterior, e.status_novo)}</td>
     </tr>`).join('');
@@ -372,18 +463,21 @@ async function telaDashboard() {
           <thead><tr><th>Data</th><th>Evento</th><th>Ativo</th><th>Autor</th><th>Status</th></tr></thead>
           <tbody>${linhas}</tbody>
         </table>
-      </div>` : blocoVazio('Nenhum evento ainda',
+      </div>
+      <p class="rodape-tabela">
+        Mostrando os ${dados.ultimos_eventos.length} eventos mais recentes.
+        <a href="${endereco('auditoria')}">Ver a auditoria completa</a>
+      </p>` : blocoVazio('Nenhum evento ainda',
         'Assim que o primeiro equipamento for registrado, o histórico aparece aqui.',
-        '<button class="botao primario" id="ir-registrar">Registrar evento</button>')}
+        `<a class="botao primario" href="${endereco('registrar')}">Registrar evento</a>`)}
     </div>`;
-
-  const irAprovacoes = $('#ir-aprovacoes');
-  if (irAprovacoes) irAprovacoes.addEventListener('click', () => navegar('aprovacoes'));
-  const irRegistrar = $('#ir-registrar');
-  if (irRegistrar) irRegistrar.addEventListener('click', () => navegar('registrar'));
 }
 
-async function telaAtivos(filtros = {}) {
+async function telaAtivos(rota) {
+  const filtros = {
+    q: rota.params.get('q') || '',
+    status: rota.params.get('status') || '',
+  };
   const parametros = new URLSearchParams();
   if (filtros.status) parametros.set('status', filtros.status);
   if (filtros.q) parametros.set('q', filtros.q);
@@ -395,7 +489,7 @@ async function telaAtivos(filtros = {}) {
 
   const linhas = ativos.map((a) => `
     <tr class="clicavel" data-id="${a.id}">
-      <td><strong>${escapar(a.patrimonio)}</strong></td>
+      <td><a class="link-ativo" href="${endereco('ativos', { parametro: a.id })}">${escapar(a.patrimonio)}</a></td>
       <td>${escapar(a.numero_serie)}</td>
       <td>${escapar(a.fabricante)} ${escapar(a.modelo)}<br><small>${escapar(a.tipo_equipamento)}</small></td>
       <td>${selo(a.status_atual)}</td>
@@ -405,48 +499,53 @@ async function telaAtivos(filtros = {}) {
 
   $('#conteudo').innerHTML = `
     <h2>Ativos</h2>
-    <div class="barra-acoes">
-      <input id="busca-ativos" class="busca" placeholder="Buscar por patrimônio, S/N, modelo, responsável…" value="${escapar(filtros.q || '')}">
-      <select id="filtro-status">
+    <form class="barra-acoes" id="form-filtro-ativos" role="search">
+      <input id="busca-ativos" class="busca" name="q" placeholder="Buscar por patrimônio, S/N, modelo, responsável…"
+             aria-label="Buscar equipamentos" value="${escapar(filtros.q)}">
+      <select id="filtro-status" name="status" aria-label="Filtrar por status">
         <option value="">Todos os status</option>${opcoes}
       </select>
-      <button class="botao" id="botao-filtrar">Filtrar</button>
-    </div>
+      <button class="botao" type="submit">Filtrar</button>
+      ${comFiltro ? `<a class="botao discreto" href="${endereco('ativos')}">Limpar</a>` : ''}
+    </form>
     <div class="cartao">
       ${linhas ? `<div class="rolagem-tabela">
         <table>
           <thead><tr><th>Patrimônio</th><th>S/N</th><th>Equipamento</th><th>Status</th><th>Responsável</th><th>Localização</th></tr></thead>
           <tbody id="corpo-ativos">${linhas}</tbody>
         </table>
-      </div>` : blocoVazio(
+      </div>
+      <p class="rodape-tabela">${ativos.length} equipamento(s)${comFiltro ? ' para este filtro' : ''}.</p>`
+      : blocoVazio(
         comFiltro ? 'Nenhum ativo para esse filtro' : 'Nenhum ativo cadastrado',
         comFiltro
           ? 'Tente outro termo de busca ou limpe o filtro de status.'
           : 'Registre um Recebimento para o primeiro equipamento entrar no controle.',
-        comFiltro ? '' : '<button class="botao primario" id="ir-registrar">Registrar recebimento</button>'
+        comFiltro
+          ? `<a class="botao" href="${endereco('ativos')}">Limpar filtro</a>`
+          : `<a class="botao primario" href="${endereco('registrar')}">Registrar recebimento</a>`
       )}
     </div>`;
 
-  const filtrar = () => telaAtivos({ q: $('#busca-ativos').value.trim(), status: $('#filtro-status').value });
-  $('#botao-filtrar').addEventListener('click', filtrar);
-  $('#busca-ativos').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') filtrar();
+  $('#form-filtro-ativos').addEventListener('submit', (e) => {
+    e.preventDefault();
+    irPara(endereco('ativos', { filtros: { q: $('#busca-ativos').value.trim(), status: $('#filtro-status').value } }));
   });
   const corpo = $('#corpo-ativos');
   if (corpo) {
     corpo.addEventListener('click', (e) => {
+      // O patrimônio é um link de verdade (dá para copiar e abrir em nova aba);
+      // o resto da linha também navega, por conforto.
+      if (e.target.closest('a')) return;
       const linha = e.target.closest('tr[data-id]');
-      if (linha) telaDetalheAtivo(Number(linha.dataset.id));
+      if (linha) irPara(endereco('ativos', { parametro: linha.dataset.id }));
     });
   }
-  const irRegistrar = $('#ir-registrar');
-  if (irRegistrar) irRegistrar.addEventListener('click', () => navegar('registrar'));
 }
 
 async function telaDetalheAtivo(id) {
-  $('#conteudo').innerHTML = ESQUELETO;
-  window.scrollTo({ top: 0 });
-  const { ativo, eventos } = await api(`/api/ativos/${id}`);
+  const { ativo, eventos } = await api(`/api/ativos/${encodeURIComponent(id)}`);
+  document.title = `SGA-TI — ${ativo.patrimonio}`;
 
   const itens = eventos.map((e) => `
     <li>
@@ -459,7 +558,7 @@ async function telaDetalheAtivo(id) {
 
   $('#conteudo').innerHTML = `
     <div class="barra-acoes">
-      <button class="botao" id="voltar-ativos">← Voltar para ativos</button>
+      <a class="botao" href="${endereco('ativos')}">← Voltar para ativos</a>
       <button class="botao" id="verificar-integridade">Verificar integridade da trilha</button>
     </div>
     <div class="cartao">
@@ -480,20 +579,21 @@ async function telaDetalheAtivo(id) {
       ${itens ? `<ul class="linha-tempo">${itens}</ul>` : blocoVazio('Sem eventos', 'Este ativo ainda não tem movimentações registradas.')}
     </div>`;
 
-  $('#voltar-ativos').addEventListener('click', () => navegar('ativos'));
-  $('#verificar-integridade').addEventListener('click', async () => {
+  $('#verificar-integridade').addEventListener('click', async (e) => {
     mostrarAviso('#resultado-integridade', 'info', 'Verificando a cadeia de registros…');
-    try {
-      const r = await api(`/api/ativos/${id}/integridade`);
-      if (r.valida) {
-        mostrarAviso('#resultado-integridade', 'sucesso',
-          `Cadeia íntegra: ${r.eventos_verificados} evento(s) verificados, nenhum sinal de alteração.`);
-      } else {
-        mostrarAviso('#resultado-integridade', 'erro', 'Cadeia comprometida — registros não conferem:', r.falhas);
+    await comBotaoOcupado(e.currentTarget, 'Verificando…', async () => {
+      try {
+        const r = await api(`/api/ativos/${encodeURIComponent(id)}/integridade`);
+        if (r.valida) {
+          mostrarAviso('#resultado-integridade', 'sucesso',
+            `Cadeia íntegra: ${r.eventos_verificados} evento(s) verificados, nenhum sinal de alteração.`);
+        } else {
+          mostrarAviso('#resultado-integridade', 'erro', 'Cadeia comprometida — registros não conferem:', r.falhas);
+        }
+      } catch (erro) {
+        if (erro.message !== 'sessão expirada') mostrarAviso('#resultado-integridade', 'erro', erro.message, erro.detalhes);
       }
-    } catch (erro) {
-      mostrarAviso('#resultado-integridade', 'erro', erro.message, erro.detalhes);
-    }
+    });
   });
 }
 
@@ -540,9 +640,16 @@ const FORMULARIOS = {
     { nome: 'numero_serie_confirmado', rotulo: 'Confirme o S/N', dica: 'Redigite — conferência obrigatória' },
     { nome: 'motivo', rotulo: 'Motivo do descarte' },
     { nome: 'limpeza_dados', rotulo: 'Limpeza segura de dados', tipo: 'select', opcoes: ['confirmada', 'dispensada'] },
-    { nome: 'justificativa_dispensa', rotulo: 'Justificativa da dispensa', dica: 'Obrigatória se a limpeza foi dispensada', opcional: true },
+    {
+      nome: 'justificativa_dispensa',
+      rotulo: 'Justificativa da dispensa',
+      dica: 'Obrigatória quando a limpeza é dispensada',
+      opcional: true,
+      // Vira obrigatório assim que "dispensada" é escolhido, sem esperar o envio.
+      obrigatorioSe: { campo: 'limpeza_dados', valor: 'dispensada' },
+    },
     { nome: 'aprovador', rotulo: 'Aprovador' },
-    { nome: 'evidencia', rotulo: 'Evidência', dica: 'Nº do termo assinado ou link da foto' },
+    { nome: 'evidencia', rotulo: 'Evidência', dica: 'Nº do termo assinado ou link https da empresa' },
     { nome: 'observacoes', rotulo: 'Observações', tipo: 'textarea', opcional: true },
   ],
   Retificacao: [
@@ -561,73 +668,155 @@ const RESUMO_EVENTO = {
   Retificacao: 'Corrige um evento anterior sem apagar o registro original.',
 };
 
-async function telaRegistrar() {
+async function telaRegistrar(rota) {
   const tipos = Object.keys(FORMULARIOS);
+  const tipoRota = rota && rota.params.get('tipo');
+  const tipoInicial = tipos.includes(tipoRota) ? tipoRota : tipos[0];
+
   $('#conteudo').innerHTML = `
     <h2>Registrar evento</h2>
     <div class="cartao">
       <label>Tipo de evento
-        <select id="tipo-evento">${tipos.map((t) => `<option value="${t}">${escapar(rotuloEvento(t))}</option>`).join('')}</select>
+        <select id="tipo-evento">${tipos.map((t) => `<option value="${t}" ${t === tipoInicial ? 'selected' : ''}>${escapar(rotuloEvento(t))}</option>`).join('')}</select>
         <span class="dica" id="resumo-evento"></span>
       </label>
-      <form id="form-evento"></form>
+      <p class="legenda-obrigatorio"><span class="marca-obrigatorio" aria-hidden="true">*</span> campo obrigatório</p>
+      <form id="form-evento" novalidate></form>
       <div id="retorno-evento" hidden></div>
     </div>`;
+
+  const campoHtml = (campo) => {
+    const obrigatorio = !campo.opcional;
+    const marca = obrigatorio ? '<span class="marca-obrigatorio" aria-hidden="true">*</span>' : '';
+    const req = obrigatorio ? 'required' : '';
+    // Campo cuja obrigatoriedade depende de outro ganha um asterisco que
+    // aparece junto com a exigência, em vez de rótulo fixo que engana.
+    const marcaCondicional = campo.obrigatorioSe
+      ? `<span class="marca-obrigatorio" data-marca="${campo.nome}" hidden>*</span>` : '';
+    const dica = campo.dica ? `<span class="dica" data-dica="${campo.nome}">${escapar(campo.dica)}</span>` : '';
+    if (campo.tipo === 'select') {
+      return `<label>${campo.rotulo}${marca}
+        <select name="${campo.nome}" ${req}>${campo.opcoes.map((o) => `<option>${o}</option>`).join('')}</select>${dica}
+      </label>`;
+    }
+    if (campo.tipo === 'textarea') {
+      return `<label>${campo.rotulo}${marca}<textarea name="${campo.nome}" rows="2" ${req}></textarea>${dica}</label>`;
+    }
+    if (campo.tipo === 'checkbox') {
+      return `<label class="campo-checkbox"><input type="checkbox" name="${campo.nome}" ${req}> ${campo.rotulo}${marca}</label>`;
+    }
+    return `<label>${campo.rotulo}${marca}${marcaCondicional}<input name="${campo.nome}" type="${campo.tipo || 'text'}" ${req}>${dica}</label>`;
+  };
 
   const desenharCampos = () => {
     const tipo = $('#tipo-evento').value;
     $('#resumo-evento').textContent = RESUMO_EVENTO[tipo] || '';
-    const campos = FORMULARIOS[tipo].map((campo) => {
-      const obrigatorio = campo.opcional ? '' : 'required';
-      const dica = campo.dica ? `<span class="dica">${escapar(campo.dica)}</span>` : '';
-      if (campo.tipo === 'select') {
-        return `<label>${campo.rotulo}
-          <select name="${campo.nome}" ${obrigatorio}>${campo.opcoes.map((o) => `<option>${o}</option>`).join('')}</select>${dica}
-        </label>`;
-      }
-      if (campo.tipo === 'textarea') {
-        return `<label>${campo.rotulo}<textarea name="${campo.nome}" rows="2" ${obrigatorio}></textarea>${dica}</label>`;
-      }
-      if (campo.tipo === 'checkbox') {
-        return `<label class="campo-checkbox"><input type="checkbox" name="${campo.nome}" ${obrigatorio}> ${campo.rotulo}</label>`;
-      }
-      return `<label>${campo.rotulo}<input name="${campo.nome}" type="${campo.tipo || 'text'}" ${obrigatorio}>${dica}</label>`;
-    }).join('');
     $('#form-evento').innerHTML = `
-      <div class="linha-campos">${campos}</div>
+      <div class="linha-campos">${FORMULARIOS[tipo].map(campoHtml).join('')}</div>
       <button type="submit" class="botao primario">Registrar ${escapar(rotuloEvento(tipo))}</button>`;
     limparAviso('#retorno-evento');
+    aplicarDependencias(tipo);
+    restaurarRascunho(tipo);
   };
 
+  // Campo que só é obrigatório em função de outro (a justificativa da dispensa
+  // no descarte): a marcação muda na hora, não depois de o envio falhar.
+  function aplicarDependencias(tipo) {
+    const formulario = $('#form-evento');
+    for (const campo of FORMULARIOS[tipo]) {
+      if (!campo.obrigatorioSe) continue;
+      const gatilho = formulario.elements[campo.obrigatorioSe.campo];
+      const alvo = formulario.elements[campo.nome];
+      if (!gatilho || !alvo) continue;
+      const sincronizar = () => {
+        const exigido = gatilho.value === campo.obrigatorioSe.valor;
+        alvo.required = exigido;
+        alvo.closest('label').classList.toggle('exigido-agora', exigido);
+        const dica = formulario.querySelector(`[data-dica="${campo.nome}"]`);
+        if (dica) dica.textContent = exigido ? 'Obrigatória: a limpeza foi dispensada' : campo.dica;
+        const marca = formulario.querySelector(`[data-marca="${campo.nome}"]`);
+        if (marca) marca.hidden = !exigido;
+      };
+      gatilho.addEventListener('change', sincronizar);
+      sincronizar();
+    }
+  }
+
+  // Rascunho em memória: trocar de tela, abrir a ficha de um ativo para
+  // conferir o S/N ou perder a sessão não apaga o que já foi digitado.
+  function guardarRascunho() {
+    const tipo = $('#tipo-evento').value;
+    const formulario = $('#form-evento');
+    const valores = {};
+    for (const campo of FORMULARIOS[tipo]) {
+      const el = formulario.elements[campo.nome];
+      if (!el) continue;
+      valores[campo.nome] = campo.tipo === 'checkbox' ? el.checked : el.value;
+    }
+    estado.rascunhoEvento = { tipo, valores };
+  }
+
+  function restaurarRascunho(tipo) {
+    const rascunho = estado.rascunhoEvento;
+    if (!rascunho || rascunho.tipo !== tipo) return;
+    const formulario = $('#form-evento');
+    let restaurou = false;
+    for (const [nome, valor] of Object.entries(rascunho.valores)) {
+      const el = formulario.elements[nome];
+      if (!el || valor === '' || valor === false) continue;
+      if (typeof valor === 'boolean') el.checked = valor;
+      else el.value = valor;
+      restaurou = true;
+    }
+    if (restaurou) {
+      mostrarAviso('#retorno-evento', 'info', 'Recuperamos o que você havia preenchido neste formulário.');
+      aplicarDependencias(tipo);
+    }
+  }
+
   desenharCampos();
-  $('#tipo-evento').addEventListener('change', desenharCampos);
+  $('#tipo-evento').addEventListener('change', () => {
+    estado.rascunhoEvento = null;
+    desenharCampos();
+    // O tipo escolhido entra no endereço: dá para favoritar "registrar descarte".
+    history.replaceState(null, '', endereco('registrar', { filtros: { tipo: $('#tipo-evento').value } }));
+  });
+  $('#form-evento').addEventListener('input', guardarRascunho);
+  $('#form-evento').addEventListener('change', guardarRascunho);
 
   $('#form-evento').addEventListener('submit', async (evento) => {
     evento.preventDefault();
+    const formulario = evento.target;
+    if (!formulario.reportValidity()) return;
+
     const tipo = $('#tipo-evento').value;
-    const formulario = new FormData(evento.target);
     const dados = {};
     for (const campo of FORMULARIOS[tipo]) {
-      if (campo.tipo === 'checkbox') {
-        dados[campo.nome] = formulario.get(campo.nome) === 'on';
-      } else {
-        const valor = String(formulario.get(campo.nome) || '').trim();
-        if (valor) dados[campo.nome] = valor;
-      }
+      const el = formulario.elements[campo.nome];
+      if (!el) continue;
+      if (campo.tipo === 'checkbox') dados[campo.nome] = el.checked;
+      else if (el.value.trim()) dados[campo.nome] = el.value.trim();
     }
+
     mostrarAviso('#retorno-evento', 'info', 'Registrando…');
-    try {
-      const resultado = await api('/api/eventos', { metodo: 'POST', corpo: { tipo, dados } });
-      if (resultado.aprovacao_pendente) {
-        mostrarAviso('#retorno-evento', 'alerta', resultado.mensagem);
-      } else {
-        mostrarAviso('#retorno-evento', 'sucesso',
-          `Evento nº ${resultado.evento_id} registrado. Status do ativo: ${resultado.status_novo}.`);
-        evento.target.reset();
+    await comBotaoOcupado(formulario.querySelector('button[type=submit]'), 'Registrando…', async () => {
+      try {
+        const resultado = await api('/api/eventos', { metodo: 'POST', corpo: { tipo, dados } });
+        estado.rascunhoEvento = null;
+        if (resultado.aprovacao_pendente) {
+          mostrarAviso('#retorno-evento', 'alerta', resultado.mensagem);
+        } else {
+          const ver = `<a class="botao pequeno" href="${endereco('ativos', { parametro: resultado.ativo_id })}">Ver o equipamento</a>`;
+          $('#retorno-evento').innerHTML = htmlAviso('sucesso',
+            `Evento nº ${resultado.evento_id} registrado. Status do ativo: ${resultado.status_novo}.`, null, ver);
+          $('#retorno-evento').hidden = false;
+          formulario.reset();
+          aplicarDependencias(tipo);
+        }
+      } catch (erro) {
+        if (erro.message !== 'sessão expirada') mostrarAviso('#retorno-evento', 'erro', erro.message, erro.detalhes);
       }
-    } catch (erro) {
-      mostrarAviso('#retorno-evento', 'erro', erro.message, erro.detalhes);
-    }
+    });
   });
 }
 
@@ -638,7 +827,8 @@ async function telaAprovacoes() {
   const linhas = aprovacoes.map((ap) => `
     <tr>
       <td>${ap.id}</td>
-      <td><strong>${escapar(ap.patrimonio)}</strong> · ${escapar(ap.modelo)}<br><small>S/N ${escapar(ap.numero_serie)}</small></td>
+      <td><a class="link-ativo" href="${endereco('ativos', { parametro: ap.ativo_id })}">${escapar(ap.patrimonio)}</a>
+        · ${escapar(ap.modelo)}<br><small>S/N ${escapar(ap.numero_serie)}</small></td>
       <td>${escapar(ap.payload.motivo || '—')}</td>
       <td>${escapar(ap.solicitante_nome)}<br><small>${formatarData(ap.criado_em)}</small></td>
       <td>${podeDecidir ? `
@@ -688,19 +878,25 @@ async function telaAprovacoes() {
     });
     if (!resposta) return;
 
-    try {
-      await api(`/api/aprovacoes/${botao.dataset.id}/decisao`, {
-        metodo: 'POST',
-        corpo: { decisao, justificativa: resposta.valor },
-      });
-      telaAprovacoes();
-    } catch (erro) {
-      mostrarAviso('#retorno-aprovacao', 'erro', erro.message, erro.detalhes);
-    }
+    await comBotaoOcupado(botao, 'Enviando…', async () => {
+      try {
+        await api(`/api/aprovacoes/${botao.dataset.id}/decisao`, {
+          metodo: 'POST',
+          corpo: { decisao, justificativa: resposta.valor },
+        });
+        aplicarRota();
+      } catch (erro) {
+        if (erro.message !== 'sessão expirada') mostrarAviso('#retorno-aprovacao', 'erro', erro.message, erro.detalhes);
+      }
+    });
   });
 }
 
-async function telaAuditoria(filtros = {}) {
+async function telaAuditoria(rota) {
+  const filtros = {
+    colaborador: rota.params.get('colaborador') || '',
+    tipo: rota.params.get('tipo') || '',
+  };
   const parametros = new URLSearchParams();
   if (filtros.colaborador) parametros.set('colaborador', filtros.colaborador);
   if (filtros.tipo) parametros.set('tipo', filtros.tipo);
@@ -713,7 +909,8 @@ async function telaAuditoria(filtros = {}) {
       <td>${e.id}</td>
       <td>${formatarData(e.data_hora)}</td>
       <td>${escapar(rotuloEvento(e.tipo))}</td>
-      <td><strong>${escapar(e.patrimonio)}</strong><br><small>${escapar(e.modelo)}</small></td>
+      <td><a class="link-ativo" href="${endereco('ativos', { parametro: e.ativo_id })}">${escapar(e.patrimonio)}</a>
+        <br><small>${escapar(e.modelo)}</small></td>
       <td>${escapar(e.autor_nome)}</td>
       <td>${transicao(e.status_anterior, e.status_novo)}</td>
     </tr>`).join('');
@@ -724,27 +921,31 @@ async function telaAuditoria(filtros = {}) {
        Nenhum registro pode ser editado ou apagado — correções aparecem como Retificação.</p>
     ${apenasProprio ? htmlAviso('info',
       `Seu papel dá acesso apenas ao seu próprio histórico (${colaborador}). A consulta ampla, que mostra a atuação de todos os colaboradores, é restrita a aprovador e administrador.`) : ''}
-    <div class="barra-acoes">
-      <input id="filtro-colaborador" class="busca" placeholder="Nome do colaborador…" value="${escapar(filtros.colaborador || '')}" ${apenasProprio ? 'disabled' : ''}>
-      <select id="filtro-tipo">${tipos.map((t) => `<option value="${t}" ${filtros.tipo === t ? 'selected' : ''}>${t ? escapar(rotuloEvento(t)) : 'Todos os eventos'}</option>`).join('')}</select>
-      <button class="botao" id="botao-auditar">Consultar</button>
-    </div>
+    <form class="barra-acoes" id="form-filtro-auditoria" role="search">
+      <input id="filtro-colaborador" class="busca" placeholder="Nome do colaborador…"
+             aria-label="Filtrar por colaborador" value="${escapar(filtros.colaborador)}" ${apenasProprio ? 'disabled' : ''}>
+      <select id="filtro-tipo" aria-label="Filtrar por tipo de evento">${tipos.map((t) => `<option value="${t}" ${filtros.tipo === t ? 'selected' : ''}>${t ? escapar(rotuloEvento(t)) : 'Todos os eventos'}</option>`).join('')}</select>
+      <button class="botao" type="submit">Consultar</button>
+    </form>
     <div class="cartao">
       ${linhas ? `<div class="rolagem-tabela">
         <table>
           <thead><tr><th>Nº</th><th>Data</th><th>Evento</th><th>Ativo</th><th>Autor</th><th>Status</th></tr></thead>
           <tbody>${linhas}</tbody>
         </table>
-      </div>` : blocoVazio('Nenhum evento encontrado', 'Ajuste o nome do colaborador ou o tipo de evento e consulte de novo.')}
+      </div>
+      <p class="rodape-tabela">${eventos.length} evento(s)${eventos.length === 300 ? ' — mostrando os 300 mais recentes' : ''}.</p>`
+      : blocoVazio('Nenhum evento encontrado', 'Ajuste o nome do colaborador ou o tipo de evento e consulte de novo.')}
     </div>`;
 
-  const consultar = () => telaAuditoria({
-    colaborador: apenasProprio ? '' : $('#filtro-colaborador').value.trim(),
-    tipo: $('#filtro-tipo').value,
-  });
-  $('#botao-auditar').addEventListener('click', consultar);
-  $('#filtro-colaborador').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') consultar();
+  $('#form-filtro-auditoria').addEventListener('submit', (e) => {
+    e.preventDefault();
+    irPara(endereco('auditoria', {
+      filtros: {
+        colaborador: apenasProprio ? '' : $('#filtro-colaborador').value.trim(),
+        tipo: $('#filtro-tipo').value,
+      },
+    }));
   });
 }
 
@@ -766,19 +967,21 @@ async function telaUsuarios() {
     </div>
     <div class="cartao">
       <h3>Novo usuário</h3>
+      <p class="legenda-obrigatorio"><span class="marca-obrigatorio" aria-hidden="true">*</span> campo obrigatório</p>
       <form id="form-usuario">
         <div class="linha-campos">
-          <label>Nome<input name="nome" required></label>
-          <label>E-mail<input name="email" type="email" required></label>
+          <label>Nome<span class="marca-obrigatorio" aria-hidden="true">*</span><input name="nome" required></label>
+          <label>E-mail<span class="marca-obrigatorio" aria-hidden="true">*</span><input name="email" type="email" required></label>
           <label>Matrícula<input name="matricula"></label>
-          <label>Papel
+          <label>Papel<span class="marca-obrigatorio" aria-hidden="true">*</span>
             <select name="papel">
               <option>operador</option><option>tecnico</option>
               <option>aprovador</option><option>admin</option>
             </select>
             <span class="dica">Só aprovador e admin decidem descartes</span>
           </label>
-          <label>Senha inicial<input name="senha" type="password" minlength="8" required>
+          <label>Senha inicial<span class="marca-obrigatorio" aria-hidden="true">*</span>
+            <input name="senha" type="password" minlength="8" required>
             <span class="dica">Mínimo de 8 caracteres</span>
           </label>
         </div>
@@ -789,13 +992,15 @@ async function telaUsuarios() {
 
   $('#form-usuario').addEventListener('submit', async (evento) => {
     evento.preventDefault();
-    const formulario = new FormData(evento.target);
-    try {
-      await api('/api/usuarios', { metodo: 'POST', corpo: Object.fromEntries(formulario) });
-      telaUsuarios();
-    } catch (erro) {
-      mostrarAviso('#retorno-usuario', 'erro', erro.message, erro.detalhes);
-    }
+    const formulario = evento.target;
+    await comBotaoOcupado(formulario.querySelector('button[type=submit]'), 'Criando…', async () => {
+      try {
+        await api('/api/usuarios', { metodo: 'POST', corpo: Object.fromEntries(new FormData(formulario)) });
+        aplicarRota();
+      } catch (erro) {
+        if (erro.message !== 'sessão expirada') mostrarAviso('#retorno-usuario', 'erro', erro.message, erro.detalhes);
+      }
+    });
   });
 }
 

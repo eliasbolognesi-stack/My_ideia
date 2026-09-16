@@ -158,6 +158,11 @@ p:last-child { margin-bottom: 0; }
   outline-offset: 2px;
   border-radius: var(--raio-p);
 }
+/* A cada troca de tela o foco vai para o título, para o leitor de tela
+   anunciar onde a pessoa está. Como o título não é clicável, o anel seria
+   só ruído visual para quem usa o mouse. */
+#conteudo h2[tabindex]:focus,
+#conteudo h2[tabindex]:focus-visible { outline: none; }
 
 /* ==========================================================================
    Login
@@ -253,22 +258,20 @@ p:last-child { margin-bottom: 0; }
   gap: 2px;
   margin-top: var(--e4);
 }
-#menu button {
+#menu a {
   display: flex;
   align-items: center;
   gap: var(--e2);
   min-height: 40px;
   text-align: left;
-  background: none;
-  border: 0;
   color: var(--texto-suave);
+  text-decoration: none;
   padding: var(--e2) var(--e3);
   border-radius: var(--raio-p);
   font: inherit;
-  cursor: pointer;
 }
-#menu button:hover { background: var(--superficie-2); color: var(--texto); }
-#menu button.ativo {
+#menu a:hover { background: var(--superficie-2); color: var(--texto); }
+#menu a.ativo {
   background: var(--acento-suave);
   color: var(--acento);
   font-weight: 600;
@@ -500,6 +503,30 @@ input:focus, select:focus, textarea:focus {
 
 .aviso-acao { margin-left: auto; align-self: center; }
 
+/* Rodapé informativo de listas: quantidade e limite de exibição */
+.rodape-tabela {
+  margin: var(--e3) 0 0;
+  padding-top: var(--e3);
+  border-top: 1px solid var(--borda);
+  font-size: 12.5px;
+  color: var(--texto-suave);
+}
+.rodape-tabela a { color: var(--acento); }
+
+/* Campo obrigatório: marcação constante, e destaque quando a obrigatoriedade
+   depende de outro campo (justificativa da dispensa no descarte) */
+.marca-obrigatorio { color: var(--perigo); margin-left: 3px; font-weight: 700; }
+.legenda-obrigatorio {
+  margin: 0 0 var(--e4);
+  font-size: 12px;
+  color: var(--texto-fraco);
+}
+label.exigido-agora .dica { color: var(--alerta); font-weight: 600; }
+label.exigido-agora input { border-color: var(--alerta); }
+
+.link-ativo { color: var(--acento); font-weight: 600; text-decoration: none; }
+.link-ativo:hover { text-decoration: underline; }
+
 .erro { color: var(--perigo); font-size: 13px; }
 .sucesso { color: var(--ok); font-size: 13px; }
 
@@ -547,6 +574,9 @@ tr.clicavel:hover { background: var(--superficie-2); }
 @media (max-width: 1180px) { .grade-indicadores { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 620px) { .grade-indicadores { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .indicador {
+  display: block;
+  color: inherit;
+  text-decoration: none;
   background: var(--superficie);
   border: 1px solid var(--borda);
   border-radius: var(--raio-g);
@@ -576,6 +606,7 @@ tr.clicavel:hover { background: var(--superficie-2); }
   background: var(--chip, var(--texto-fraco));
 }
 .indicador[data-status] .valor { color: var(--chip); }
+a.indicador:hover { border-color: var(--chip, var(--borda-forte)); background: var(--superficie-2); }
 
 /* ==========================================================================
    Selos de status
@@ -739,7 +770,9 @@ dialog.dialogo::backdrop { background: rgba(3, 5, 10, 0.6); }
     -webkit-overflow-scrolling: touch;
   }
   #menu::-webkit-scrollbar { display: none; }
-  #menu button { min-height: 44px; white-space: nowrap; }
+  #menu a { min-height: 44px; white-space: nowrap; }
+  /* Alvo de toque confortável: nada abaixo de 44px na barra do celular. */
+  .seletor-tema select, .rodape-lateral .botao { min-height: 44px; }
   #menu::after { content: ""; flex: 0 0 var(--e2); }
   .badge { margin-left: var(--e1); }
 
@@ -757,6 +790,16 @@ dialog.dialogo::backdrop { background: rgba(3, 5, 10, 0.6); }
   .cartao { padding: var(--e4); }
   h2 { font-size: 18px; }
   .barra-acoes .busca { min-width: 0; }
+}
+
+/* Toque: dedo precisa de alvo maior que cursor, em qualquer tamanho de tela.
+   A regra é por tipo de ponteiro, não por largura — tablet e notebook com
+   tela sensível também entram. */
+@media (pointer: coarse) {
+  .botao, .botao.pequeno, #menu a, .seletor-tema select, input, select, textarea {
+    min-height: 44px;
+  }
+  .campo-checkbox input { min-height: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

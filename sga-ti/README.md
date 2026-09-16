@@ -35,7 +35,7 @@ aba **Usuários**.
 | `SGA_TI_ATRAS_PROXY` | `false` | Aceita `X-Forwarded-For`. **Ligue só atrás de proxy reverso** |
 | `SGA_TI_FORCAR_HTTPS` | `false` | Envia `Strict-Transport-Security` (ligue quando servido por HTTPS) |
 | `SGA_TI_MANUTENCAO` | `false` | Responde 503 em tudo, sem derrubar o processo |
-| `SGA_TI_LIMITE_LOGIN` | `20` | Tentativas de login por origem, a cada 10 minutos |
+| `SGA_TI_LIMITE_LOGIN` | `20` | Tentativas de login **sem sucesso** por origem, a cada 10 minutos |
 | `SGA_TI_LIMITE_EVENTOS` | `60` | Eventos por usuário, por minuto |
 | `SGA_TI_LIMITE_WEBHOOK` | `120` | Chamadas por chave de webhook, por minuto |
 | `SGA_TI_TAMANHO_CAMPO` | `2000` | Tamanho máximo de cada campo de texto recebido |
@@ -102,6 +102,27 @@ não erro — vermelho fica reservado para ação destrutiva e falha de validaç
 Todos os pares de texto/fundo dos dois temas foram verificados em WCAG AA (≥ 4.5:1 para texto).
 O menor par é o selo "Em uso" no tema claro, com 4.80:1.
 
+### Navegação por endereço
+
+Cada tela tem endereço próprio: `#/painel`, `#/ativos?q=dell&status=Em%20uso`, `#/ativos/12`,
+`#/registrar?tipo=Descarte`, `#/auditoria?colaborador=Maria`. Não é enfeite — é o que faz o
+**botão Voltar do navegador funcionar**, permite **favoritar uma busca** e **mandar o link de um
+equipamento** para um colega, e mantém a tela e os filtros ao recarregar (F5). O menu é feito de
+links de verdade, então abrir em nova aba e copiar o endereço funcionam como em qualquer site.
+
+Quem abre um link direto sem estar autenticado entra e **cai exatamente naquela tela**, em vez de
+ser jogado no painel.
+
+### Quando a sessão expira
+
+A sessão dura 12 horas. Quando ela acaba no meio do trabalho, o sistema:
+
+1. leva à tela de login **com a explicação do que aconteceu** (antes a pessoa caía lá sem aviso);
+2. **volta para a mesma tela** depois de entrar de novo;
+3. **recupera o que estava digitado** no formulário de evento, avisando que recuperou.
+
+O rascunho do formulário também sobrevive a trocar de tela para conferir um S/N e voltar.
+
 Decisões de usabilidade que acompanham o visual:
 
 - Erros de validação da API aparecem como lista, com o nome do campo traduzido para o rótulo do
@@ -109,8 +130,15 @@ Decisões de usabilidade que acompanham o visual:
 - Decisões de aprovação usam um diálogo próprio (`<dialog>`, com Esc e contenção de foco) no lugar
   do `prompt()` do navegador; rejeição sem justificativa é bloqueada com mensagem visível.
 - Estados vazios explicam o que fazer em seguida; a navegação mostra esqueleto de carregamento.
-- Alvos de toque de 44px e menu rolável no mobile; anel de foco visível em toda a navegação por
-  teclado; animações respeitam `prefers-reduced-motion`.
+- Campo obrigatório é marcado com asterisco, e o que **vira** obrigatório em função de outro
+  (a justificativa quando a limpeza de dados é dispensada) muda de estado na hora, com destaque —
+  não depois que o envio falha.
+- Botão que dispara ação fica desabilitado enquanto ela corre: duplo clique não gera evento dobrado.
+- Listas informam quantos itens mostram e, quando cortam, oferecem o caminho para a lista completa.
+- Alvo de toque de 44px em qualquer tela com toque (regra por tipo de ponteiro, não por largura);
+  menu rolável no mobile; anel de foco visível em toda a navegação por teclado; a cada troca de
+  tela o foco vai para o título, para o leitor de tela anunciar onde a pessoa está; animações
+  respeitam `prefers-reduced-motion`.
 
 ## Segurança
 
@@ -121,10 +149,10 @@ O sistema foi auditado e as correções estão aplicadas. O que existe hoje:
 | **Escuta local por padrão** | O processo só aceita conexão de dentro da máquina (`SGA_TI_HOST`). O acesso externo passa por proxy reverso com TLS — ver abaixo |
 | **Cabeçalhos de segurança** | Política de conteúdo estrita (sem script embutido), `nosniff`, `frame-ancestors 'none'`, `no-referrer`, e HSTS quando servido por HTTPS |
 | **Identidade real no webhook** | Cada origem tem a própria chave e **a chave determina o autor**. Um corpo que tenta declarar outro autor é ignorado e registrado como tentativa de personificação |
-| **Limite de uso** | Login por origem, eventos por usuário e webhook por chave, com varredura periódica (sem crescer na memória) |
+| **Limite de uso** | Login por origem (conta só tentativa errada, para não travar um escritório que sai por um endereço só), eventos por usuário e webhook por chave, com varredura periódica (sem crescer na memória) |
 | **Limpeza de entrada** | Caracteres invisíveis e de controle — usados para esconder instruções dentro de um campo aparentemente inofensivo — são removidos antes de qualquer validação, e cada campo tem tamanho máximo |
 | **Registro de segurança** | Arquivo separado do banco, uma linha JSON por evento: login falho, acesso negado, limite excedido, chave inválida, autor divergente, texto com caracteres ocultos. Segredo nenhum é gravado por extenso |
-| **Escopo por papel na auditoria** | Operador e técnico veem só o próprio histórico; a consulta ampla é de aprovador e admin |
+| **Escopo por papel na auditoria** | Operador e técnico veem só o próprio histórico; a consulta ampla é de aprovador e admin. Forçar o endereço `#/usuarios` sem ser admin recebe recusa do servidor |
 | **Evidência de descarte** | Link só em `https` e, se configurado, só em domínio da empresa; esquemas como `javascript:` e `data:` são recusados |
 | **Modo manutenção** | `SGA_TI_MANUTENCAO=1` responde 503 em tudo sem derrubar o processo nem tocar no banco |
 | **Encerramento limpo** | `SIGTERM`/`SIGINT` fecham conexões e o banco com segurança |
@@ -268,7 +296,7 @@ sga-ti/
 │   └── app.js              # telas, diálogo, avisos, controle de tema
 └── test/
     ├── sga-ti.test.js      # 27 testes das regras não negociáveis
-    └── seguranca.test.js   # 17 testes das proteções (incl. servidor real por HTTP)
+    └── seguranca.test.js   # 19 testes das proteções (incl. servidor real por HTTP)
 ```
 
 ## Antes de publicar

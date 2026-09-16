@@ -62,6 +62,13 @@ function ipDoPedido(req) {
   return req.socket.remoteAddress || 'desconhecido';
 }
 
+// Na busca, "%" e "_" são curingas do banco: digitados por quem procura, eles
+// devolveriam tudo. Aqui viram texto literal, com ESCAPE declarado na consulta.
+function termoBusca(texto) {
+  const limpo = String(texto).replace(/[\\%_]/g, (c) => `\\${c}`);
+  return `%${limpo}%`;
+}
+
 function extrairToken(req) {
   const cabecalho = req.headers['authorization'] || '';
   return cabecalho.startsWith('Bearer ') ? cabecalho.slice(7) : null;
@@ -91,12 +98,20 @@ function autorizarWebhook(chaveRecebida) {
 // ---------------------------------------------------------------------------
 
 rota('POST', '/api/auth/login', { publica: true }, ({ db, corpo, ip }) => {
-  exigirDentroDoLimite(limiteLogin, ip, { ip, rota: 'login' });
+  // O limite pune tentativa ERRADA, não uso normal: um escritório inteiro
+  // costuma sair por um endereço de rede só, e bloquear entrada bem-sucedida
+  // derrubaria o time sem incomodar quem ataca.
+  if (limiteLogin.excedeu(ip)) {
+    seguranca('limite_excedido', { limitador: limiteLogin.nome, ip, rota: 'login' });
+    throw new ErroHttp(429, 'muitas tentativas sem sucesso, aguarde alguns minutos');
+  }
   const sessao = autenticacao.login(db, corpo.email, corpo.senha, config.duracaoSessaoHoras);
   if (!sessao) {
+    limiteLogin.registrar(ip);
     seguranca('login_falho', { ip, email: String(corpo.email || '').slice(0, 120) });
     throw new ErroHttp(401, 'e-mail ou senha inválidos');
   }
+  limiteLogin.perdoar(ip);
   return sessao;
 });
 
@@ -133,8 +148,11 @@ rota('GET', '/api/ativos', {}, ({ db, consulta }) => {
     valores.push(consulta.status);
   }
   if (consulta.q) {
-    clausulas.push('(patrimonio LIKE ? OR numero_serie LIKE ? OR modelo LIKE ? OR responsavel_atual LIKE ? OR localizacao_atual LIKE ?)');
-    const termo = `%${consulta.q}%`;
+    clausulas.push(
+      `(patrimonio LIKE ? ESCAPE '\\' OR numero_serie LIKE ? ESCAPE '\\' OR modelo LIKE ? ESCAPE '\\'
+        OR responsavel_atual LIKE ? ESCAPE '\\' OR localizacao_atual LIKE ? ESCAPE '\\')`
+    );
+    const termo = termoBusca(consulta.q);
     valores.push(termo, termo, termo, termo, termo);
   }
   const onde = clausulas.length ? `WHERE ${clausulas.join(' AND ')}` : '';
@@ -203,8 +221,8 @@ rota('GET', '/api/auditoria/eventos', {}, ({ db, consulta, usuario }) => {
 
   const colaborador = podeVerTodos ? consulta.colaborador : usuario.nome;
   if (colaborador) {
-    const termo = `%${colaborador}%`;
-    clausulas.push('(e.autor_nome LIKE ? OR e.dados LIKE ?)');
+    const termo = termoBusca(colaborador);
+    clausulas.push(`(e.autor_nome LIKE ? ESCAPE '\\' OR e.dados LIKE ? ESCAPE '\\')`);
     valores.push(termo, termo);
   }
   if (consulta.tipo) {
@@ -353,4 +371,4 @@ function despachar(db, req, res, url, corpo) {
   throw new ErroHttp(404, 'rota não encontrada');
 }
 
-module.exports = { despachar, ErroHttp, ErroDeValidacao, ipDoPedido, autorizarWebhook };
+module.exports = { despachar, ErroHttp, ErroDeValidacao, ipDoPedido, autorizarWebhook, termoBusca };
