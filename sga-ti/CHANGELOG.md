@@ -8,6 +8,23 @@ ambiente ficam marcadas em negrito**, e são elas que fazem um deploy falhar em 
 
 ---
 
+## [1.5.1] — 2026-09-17 — Fechamento do caminho de deploy
+
+Nada muda no sistema em si: o que muda é a chance de errar ao publicá-lo.
+
+### Adicionado
+- **`scripts/pre-voo.sh`** — conferidor que roda no servidor antes de liberar o sistema para o
+  time. Não altera nada: olha versão do Node, permissão do arquivo de chaves (640), configuração
+  perigosa, serviço ativo **e habilitado**, `Restart=always`, timer de cópia, rota de saúde,
+  redirecionamento de http para https, espaço em disco — e diz **o que fazer** em cada ponto.
+  Sai com erro se houver bloqueio. Quase todo problema de estreia é uma configuração esquecida, e
+  todas elas são verificáveis em segundos.
+- `DEPLOY.md`: passo do Langfuse e dos fluxos do n8n, passo da conferência automática, e o
+  checklist final cobrindo o que entrou em 1.4.0 e 1.5.0 (exportar CSV, desativar alguém, conferir
+  que nenhum nome de pessoa aparece no rastro).
+
+---
+
 ## [1.5.0] — 2026-09-17 — Observabilidade e fluxos do n8n
 
 Fecha o ciclo: o n8n lê a mensagem do colaborador, o Claude extrai o evento, o SGA-TI grava — e o

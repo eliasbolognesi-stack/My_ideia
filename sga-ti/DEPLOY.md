@@ -122,6 +122,15 @@ SGA_TI_DOMINIOS_EVIDENCIA=suaempresa.com,docs.suaempresa.com
 SGA_TI_EMPRESA=Sua Empresa
 ```
 
+Opcionais, que podem ficar para depois:
+
+```bash
+# Acompanhar tudo pelo Langfuse (ver passo 9). Desligado se ficar vazio.
+# SGA_TI_LANGFUSE_URL=http://localhost:3001
+# SGA_TI_LANGFUSE_CHAVE_PUBLICA=pk-lf-...
+# SGA_TI_LANGFUSE_CHAVE_SECRETA=sk-lf-...
+```
+
 ### Gerar as chaves de webhook
 
 Cada chave **pertence a uma pessoa**: quem registra pelo n8n fica identificado por ela, e o
@@ -218,7 +227,7 @@ Confira que funcionou:
 ```bash
 curl -I http://sga-ti.suaempresa.com          # deve responder 301 para https
 curl -s https://sga-ti.suaempresa.com/api/saude
-# {"ok":true,"versao":"1.5.0","banco":"ok","manutencao":false,...}
+# {"ok":true,"versao":"1.5.1","banco":"ok","manutencao":false,...}
 ```
 
 ---
@@ -274,18 +283,51 @@ sudo grep -c . /var/lib/sga-ti/seguranca.log              # eventos de seguranç
 
 ---
 
-## 9. Conferência final (faça pelo navegador)
+## 9. Ligar o acompanhamento (opcional, mas vale)
+
+Duas peças que fecham o ciclo — nenhuma delas é necessária para o sistema funcionar:
+
+- **Langfuse**: mostra o caminho de cada registro num painel, *mensagem → o que a IA entendeu →
+  o que foi gravado*. Passo a passo em [`deploy/langfuse.md`](deploy/langfuse.md). Atenção à porta:
+  o Langfuse usa a 3000 por padrão, a mesma do SGA-TI.
+- **Fluxos do n8n**: registrar equipamento a partir de uma mensagem de texto, monitor de saúde e
+  resumo semanal. Arquivos e instruções em [`../n8n/`](../n8n/).
+
+Para o fluxo de registro, gere uma chave de webhook para o n8n (passo 4) e informe-a lá. A chave
+**é a identidade**: quem registra pelo n8n fica identificado por ela.
+
+---
+
+## 10. Conferência automática
+
+Antes de chamar o time, rode o conferidor de pré-voo **no servidor**:
+
+```bash
+sudo SGA_TI_URL_PUBLICA=sga-ti.suaempresa.com bash /opt/sga-ti/scripts/pre-voo.sh
+```
+
+Ele não muda nada: olha permissão do arquivo de chaves, configuração perigosa, serviço ativo e
+habilitado, `Restart=always`, timer de cópia, rota de saúde, redirecionamento para https, espaço
+em disco — e diz **o que fazer** em cada ponto. Sai com erro se houver bloqueio.
+
+---
+
+## 11. Conferência final (faça pelo navegador)
 
 - [ ] Entrar com `admin@local`. O sistema **obriga** a trocar a senha antes de liberar qualquer
       tela: a senha do primeiro boot aparece no `journalctl` e vale só para esse primeiro acesso.
 - [ ] Cadastrar os usuários reais, cada um com o papel certo.
-- [ ] Registrar uma **entrada** de teste e conferir que ela aparece na lista.
+- [ ] Registrar um **recebimento** de teste e conferir que ele aparece na lista.
 - [ ] Abrir o ativo de teste e conferir a **trilha de auditoria**.
 - [ ] Tentar um **descarte** e conferir que ele exige a conferência de patrimônio e S/N.
+- [ ] **Exportar CSV** da lista de ativos e abrir no Excel: acentos certos, colunas separadas.
+- [ ] Criar um usuário de teste, **desativá-lo** e confirmar que ele perde o acesso na hora.
 - [ ] Trocar entre tema claro e escuro.
 - [ ] Abrir `/privacidade.html` e conferir que o **contato do DPO** está preenchido.
 - [ ] Preencher os responsáveis em [`OPERACAO.md`](OPERACAO.md).
 - [ ] Disparar um evento pelo n8n com a chave de webhook e conferir o autor registrado.
+- [ ] Se ligou o Langfuse: conferir que o rastro aparece e que **nenhum nome de pessoa** está nele
+      (no modo `metadados`, não deve aparecer).
 
 ---
 

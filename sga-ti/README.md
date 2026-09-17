@@ -345,7 +345,9 @@ sga-ti/
 │   ├── Caddyfile           # proxy com TLS automático (recomendado)
 │   ├── nginx.conf          # alternativa com certbot
 │   └── langfuse.md         # como acompanhar tudo pelo Langfuse
-├── scripts/backup.js       # cópia de segurança (VACUUM INTO) + verificação
+├── scripts/
+│   ├── backup.js           # cópia de segurança (VACUUM INTO) + verificação
+│   └── pre-voo.sh          # confere o servidor antes de liberar para o time
 ├── public/
 │   ├── index.html          # casca da aplicação
 │   ├── tema-inicial.js     # resolve o tema antes da 1ª pintura (sem script embutido)
