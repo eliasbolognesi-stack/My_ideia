@@ -82,6 +82,17 @@ module.exports = {
   // disco cheio derruba o banco junto.
   tamanhoMaximoLogMB: numero(process.env.SGA_TI_LOG_TAMANHO_MB, 5, { minimo: 0.01 }),
   arquivosLogMantidos: numero(process.env.SGA_TI_LOG_ARQUIVOS, 5, { minimo: 1 }),
+  // --- Observabilidade (Langfuse) -------------------------------------------
+  // Vazias = desligado. Ver deploy/langfuse.md.
+  langfuseUrl: (process.env.SGA_TI_LANGFUSE_URL || '').trim(),
+  langfuseChavePublica: (process.env.SGA_TI_LANGFUSE_CHAVE_PUBLICA || '').trim(),
+  langfuseChaveSecreta: (process.env.SGA_TI_LANGFUSE_CHAVE_SECRETA || '').trim(),
+  // 'metadados' (padrão) manda só estrutura e resultado; 'completo' manda o
+  // conteúdo dos eventos — e aí o Langfuse precisa ser próprio, porque passa a
+  // receber dado pessoal.
+  obsConteudo: (process.env.SGA_TI_OBS_CONTEUDO || 'metadados').trim().toLowerCase() === 'completo'
+    ? 'completo' : 'metadados',
+
   // Confia no cabeçalho X-Forwarded-For (ligue APENAS atrás de proxy reverso;
   // caso contrário o cliente forja o próprio endereço e burla o limite de uso).
   atrasDeProxy: booleano(process.env.SGA_TI_ATRAS_PROXY),

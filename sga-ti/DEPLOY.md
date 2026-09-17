@@ -218,7 +218,7 @@ Confira que funcionou:
 ```bash
 curl -I http://sga-ti.suaempresa.com          # deve responder 301 para https
 curl -s https://sga-ti.suaempresa.com/api/saude
-# {"ok":true,"versao":"1.4.0","banco":"ok","manutencao":false,...}
+# {"ok":true,"versao":"1.5.0","banco":"ok","manutencao":false,...}
 ```
 
 ---

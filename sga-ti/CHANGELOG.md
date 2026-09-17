@@ -8,6 +8,51 @@ ambiente ficam marcadas em negrito**, e são elas que fazem um deploy falhar em 
 
 ---
 
+## [1.5.0] — 2026-09-17 — Observabilidade e fluxos do n8n
+
+Fecha o ciclo: o n8n lê a mensagem do colaborador, o Claude extrai o evento, o SGA-TI grava — e o
+Langfuse mostra os três passos como **um rastro só**, em vez de três pedaços que ninguém liga.
+
+### Adicionado
+- **`src/observabilidade.js`** — exportador de rastros para o Langfuse. Duas decisões que valem
+  ser lidas:
+  - usa o **endpoint OpenTelemetry** (`/api/public/otel/v1/traces`), e **não** a API de ingestão
+    do Langfuse, que é desligada em **16/11/2026**. Além de não morrer em dois meses, é padrão
+    aberto: trocar o Langfuse por outra ferramenta não exige reescrever nada;
+  - como esse endpoint aceita OTLP em JSON, o exportador cabe no `fetch` embutido do Node —
+    **nenhuma dependência nova**, e o "zero dependências" que blindou a auditoria continua valendo.
+- **Rastro ponta a ponta**: o webhook passa a aceitar o cabeçalho `traceparent` (padrão W3C), e o
+  registro feito aqui fica pendurado no passo que o n8n abriu.
+- **Pasta [`n8n/`](../n8n/)** com três fluxos importáveis, só com nós nativos (funcionam no n8n
+  Cloud e não quebram quando os nós de IA mudam de versão):
+  `01-registrar-evento` (mensagem em texto → evento registrado, com o Claude usando
+  **duas ferramentas**: registrar quando está tudo lá, **perguntar** quando falta — a regra de
+  nunca inventar dado vira estrutura, não recomendação), `02-monitor-saude` e `03-resumo-semanal`.
+  Nenhum segredo dentro dos arquivos: tudo por variável de ambiente do n8n.
+- `n8n/verificar.mjs`, rodando na integração contínua: pega conexão para nó inexistente, nó que
+  nunca executa, nó de comunidade e segredo colado no arquivo.
+- [`deploy/langfuse.md`](deploy/langfuse.md): como subir, ligar e o que conferir no primeiro rastro.
+- 12 testes novos de observabilidade. Total: **98**.
+
+### Segurança e privacidade
+- **Desligado por padrão**: sem as três variáveis, o sistema não faz nenhuma chamada.
+- **Nunca derruba nem atrasa uma requisição.** Envio disparado e esquecido, prazo de 3 segundos,
+  erro tratado, aviso no log **uma única vez**. Testado com o Langfuse fora do ar e com ele lento:
+  a resposta sai igual. Observabilidade que derruba o sistema observado é pior do que não ter.
+- **Dado pessoal não sai no padrão.** `SGA_TI_OBS_CONTEUDO=metadados` manda nomes de campo,
+  contagens e resultado — nunca nome, e-mail ou matrícula. O modo `completo` é opt-in, e o boot
+  **avisa** se ele estiver ligado com um Langfuse fora da rede local: mandar conteúdo para um
+  serviço em nuvem é transferência de dado pessoal a terceiro (LGPD).
+- A mensagem original do colaborador **não** vai no rastro do n8n (costuma trazer nome de pessoa);
+  vai só o tamanho dela, que ajuda a investigar sem identificar ninguém.
+
+### Corrigido durante a verificação
+- O fluxo montava o corpo do webhook com os campos no primeiro nível, mas o SGA-TI espera o
+  formato da seção 10 do prompt, com `ativo` aninhado — o registro seria recusado com 422 na
+  primeira mensagem real. O esquema da ferramenta passou a produzir o contrato documentado.
+
+---
+
 ## [1.4.0] — 2026-09-17 — Ciclo de vida de conta, migrações e exportação
 
 O levantamento de pendências encontrou uma contradição: **o manual de operação e o guia de deploy

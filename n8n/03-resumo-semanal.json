@@ -1,0 +1,179 @@
+{
+  "name": "SGA-TI — resumo semanal",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "05a69c83-c146-4765-9793-f40f2def94dc",
+      "name": "Segunda, 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:3000/api/auth/login",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ email: $env.SGA_TI_EMAIL_RELATORIO, senha: $env.SGA_TI_SENHA_RELATORIO }) }}",
+        "options": {}
+      },
+      "id": "9d8c124f-17bf-4101-babd-6557e9e59dda",
+      "name": "Entrar no SGA-TI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        300
+      ],
+      "notes": "Crie um usuário próprio para o relatório, com papel aprovador (vê a trilha completa)."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:3000/api/dashboard",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fbe7844e-84c4-4ac1-a919-7c8e9f42b332",
+      "name": "Ler o painel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:3000/api/auditoria/eventos?por_pagina=500",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Entrar no SGA-TI').first().json.token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6e42c3d7-de3e-4059-a105-a86d59b72547",
+      "name": "Ler a semana",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Junta o painel e a semana de auditoria num texto curto para o time.\nconst painel = $('Ler o painel').first().json;\nconst auditoria = $input.first().json;\n\nconst porStatus = painel.por_status || {};\nconst eventos = auditoria.eventos || [];\nconst seteDias = Date.now() - 7 * 24 * 3600 * 1000;\nconst daSemana = eventos.filter((e) => new Date(e.data_hora).getTime() >= seteDias);\n\nconst contar = (tipo) => daSemana.filter((e) => e.tipo === tipo).length;\nconst total = Object.values(porStatus).reduce((s, n) => s + n, 0);\n\nconst linhas = [\n  `SGA-TI — resumo da semana (${new Date().toLocaleDateString('pt-BR')})`,\n  '',\n  `Parque: ${total} equipamento(s).`,\n  ...Object.entries(porStatus).filter(([, n]) => n > 0).map(([s, n]) => `  • ${s}: ${n}`),\n  '',\n  `Movimento dos últimos 7 dias: ${daSemana.length} evento(s).`,\n  `  • Recebimentos: ${contar('Recebimento')}`,\n  `  • Movimentações: ${contar('Movimentacao')}`,\n  `  • Manutenções: ${contar('Manutencao')}`,\n  `  • Descartes: ${contar('Descarte')}`,\n  `  • Retificações: ${contar('Retificacao')}`,\n];\n\nif (painel.aprovacoes_pendentes > 0) {\n  linhas.push('', `⚠ ${painel.aprovacoes_pendentes} descarte(s) esperando aprovação.`);\n}\n// A auditoria devolve o total real, e não só o que coube na página: se houver\n// mais eventos do que vieram, o resumo precisa dizer.\nif (auditoria.total > eventos.length) {\n  linhas.push('', `(a consulta trouxe ${eventos.length} de ${auditoria.total} eventos)`);\n}\n\nreturn [{ json: { resumo: linhas.join('\\n') } }];\n"
+      },
+      "id": "f6a046b0-287a-4352-9ccf-3466ab808b49",
+      "name": "Montar o resumo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// LIGUE AQUI o seu canal (Slack, e-mail, Telegram…).\n// O texto pronto está em $json.resumo.\nreturn $input.all();\n"
+      },
+      "id": "6c0a4983-3aca-40bd-bd1c-f812a58ce783",
+      "name": "Enviar para o time",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Segunda, 8h": {
+      "main": [
+        [
+          {
+            "node": "Entrar no SGA-TI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrar no SGA-TI": {
+      "main": [
+        [
+          {
+            "node": "Ler o painel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler o painel": {
+      "main": [
+        [
+          {
+            "node": "Ler a semana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler a semana": {
+      "main": [
+        [
+          {
+            "node": "Montar o resumo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar o resumo": {
+      "main": [
+        [
+          {
+            "node": "Enviar para o time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

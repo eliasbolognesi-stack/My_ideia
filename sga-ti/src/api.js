@@ -9,6 +9,7 @@ const { TIPOS_EVENTO, STATUS } = require('./regras');
 const { criarLimitador } = require('./limite');
 const { seguranca, resumirSegredo } = require('./registro');
 const { limparProfundo } = require('./entrada');
+const observabilidade = require('./observabilidade');
 const { ErroDeValidacao } = servico;
 const { version: VERSAO } = require('../package.json');
 
@@ -270,13 +271,44 @@ rota('GET', '/api/ativos/:id/integridade', {}, ({ db, parametros }) => {
   return { patrimonio: ativo.patrimonio, ...servico.verificarIntegridade(db, ativo.id) };
 });
 
-rota('POST', '/api/eventos', {}, ({ db, corpo, usuario, ip }) => {
+rota('POST', '/api/eventos', {}, ({ db, corpo, usuario, ip, req }) => {
   exigirDentroDoLimite(limiteEventos, `u${usuario.id}`, { ip, usuario: usuario.email, rota: 'eventos' });
   const tipo = corpo.tipo;
-  if (!TIPOS_EVENTO.includes(tipo)) {
-    throw new ErroHttp(422, `tipo inválido: aceitos ${TIPOS_EVENTO.join(', ')}`);
+
+  // O rastro cobre a validação também: é importante ver no Langfuse quantas
+  // tentativas são RECUSADAS e por quê — é o sinal de que o prompt do agente
+  // ou o formulário estão pedindo a informação errada.
+  const rastro = observabilidade.iniciar('registrar_evento', {
+    traceparent: req.headers.traceparent,
+    usuario: usuario.email,
+    atributos: {
+      'sga_ti.origem': 'interface',
+      'sga_ti.tipo_evento': String(tipo || 'ausente'),
+      'langfuse.observation.input': observabilidade.resumirDados(corpo.dados),
+    },
+  });
+
+  try {
+    if (!TIPOS_EVENTO.includes(tipo)) {
+      throw new ErroHttp(422, `tipo inválido: aceitos ${TIPOS_EVENTO.join(', ')}`);
+    }
+    const resultado = servico.registrarEvento(db, tipo, corpo.dados || {}, usuario);
+    rastro.concluir({
+      'sga_ti.evento_id': resultado.evento_id,
+      'sga_ti.ativo_id': resultado.ativo_id,
+      'sga_ti.status_novo': resultado.status_novo,
+      'langfuse.observation.output': JSON.stringify(resultado),
+    });
+    return resultado;
+  } catch (erro) {
+    rastro.falhar(erro, {
+      'sga_ti.recusado_por': erro instanceof ErroDeValidacao ? 'validacao' : 'erro',
+      // Os campos que faltaram são o que mais interessa investigar depois, e
+      // são nomes de campo, não conteúdo de ninguém.
+      'sga_ti.detalhes': erro.erros ? JSON.stringify(erro.erros).slice(0, 500) : undefined,
+    });
+    throw erro;
   }
-  return servico.registrarEvento(db, tipo, corpo.dados || {}, usuario);
 });
 
 rota('GET', '/api/aprovacoes', {}, ({ db, consulta }) => {
@@ -511,6 +543,30 @@ rota('POST', '/api/lgpd/anonimizar', { papeis: ['admin'] }, ({ db, usuario }) =>
 // que ninguém possa registrar eventos em nome de outra pessoa apenas
 // escrevendo o nome dela no corpo da requisição.
 rota('POST', '/api/webhook/n8n', { publica: true }, ({ db, corpo, req, ip }) => {
+  // Continua o rastro aberto no n8n (cabeçalho traceparent, padrão W3C). É
+  // isto que dá a visão ponta a ponta: mensagem recebida → decisão da IA →
+  // gravação aqui, tudo num rastro só, em vez de três pedaços soltos.
+  const rastro = observabilidade.iniciar('webhook_n8n', {
+    traceparent: req.headers.traceparent,
+    atributos: {
+      'sga_ti.origem': 'n8n',
+      'sga_ti.evento_declarado': String(corpo.evento || 'ausente'),
+      'langfuse.observation.input': observabilidade.resumirDados(corpo),
+    },
+  });
+
+  try {
+    return registrarPeloWebhook({ db, corpo, req, ip, rastro });
+  } catch (erro) {
+    rastro.falhar(erro, {
+      'sga_ti.recusado_por': erro instanceof ErroDeValidacao ? 'validacao' : 'erro',
+      'sga_ti.detalhes': erro.erros ? JSON.stringify(erro.erros).slice(0, 500) : undefined,
+    });
+    throw erro;
+  }
+});
+
+function registrarPeloWebhook({ db, corpo, req, ip, rastro }) {
   if (!config.chavesWebhook.size && !config.chaveWebhook) {
     throw new ErroHttp(503, 'webhook desabilitado: defina SGA_TI_WEBHOOK_KEYS no servidor');
   }
@@ -552,8 +608,17 @@ rota('POST', '/api/webhook/n8n', { publica: true }, ({ db, corpo, req, ip }) => 
 
   const mapeado = mapearEventoN8n(corpo);
   if (mapeado.erro) throw new ErroHttp(422, mapeado.erro);
-  return servico.registrarEvento(db, mapeado.tipo, mapeado.dados, autor);
-});
+  const resultado = servico.registrarEvento(db, mapeado.tipo, mapeado.dados, autor);
+  rastro.concluir({
+    'user.id': autor.email,
+    'sga_ti.tipo_evento': mapeado.tipo,
+    'sga_ti.evento_id': resultado.evento_id,
+    'sga_ti.ativo_id': resultado.ativo_id,
+    'sga_ti.status_novo': resultado.status_novo,
+    'langfuse.observation.output': JSON.stringify(resultado),
+  });
+  return resultado;
+}
 
 // ---------------------------------------------------------------------------
 // Despacho

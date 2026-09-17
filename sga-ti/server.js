@@ -54,6 +54,17 @@ function validarConfiguracao() {
   if (!config.chavesWebhook.size && !config.chaveWebhook) {
     avisos.push('Nenhuma chave de webhook: a entrada automática do n8n fica desabilitada.');
   }
+  // Conteúdo completo indo para fora da máquina é transferência de dado
+  // pessoal a terceiro. Avisar é o mínimo; bloquear seria decidir pelo dono.
+  if (config.langfuseUrl && config.obsConteudo === 'completo') {
+    const local = /^https?:\/\/(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i
+      .test(config.langfuseUrl);
+    if (!local) {
+      avisos.push('SGA_TI_OBS_CONTEUDO=completo com Langfuse fora da rede local: o conteúdo dos '
+        + 'eventos (com dado pessoal) vai sair da empresa. Use Langfuse próprio ou volte para '
+        + '"metadados".');
+    }
+  }
 
   for (const aviso of avisos) console.warn(`AVISO: ${aviso}`);
 

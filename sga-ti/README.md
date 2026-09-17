@@ -198,6 +198,27 @@ agendamento diário já vem pronto em [`deploy/sga-ti-backup.timer`](deploy/sga-
 **guarde uma cópia fora deste servidor** (linha `ExecStartPost` do `.service`). Procedimentos de emergência, restauração e
 resposta a incidente estão em [`OPERACAO.md`](OPERACAO.md).
 
+### Observabilidade (opcional)
+
+Ligando o [Langfuse](deploy/langfuse.md), cada registro vira um rastro que mostra o caminho
+inteiro: **mensagem recebida no n8n → o que a IA entendeu → o que foi gravado aqui**. Serve para
+responder o que hoje não tem resposta: quantos pedidos a IA recusou, quais campos faltam com mais
+frequência, quanto custou o mês.
+
+Desligado por padrão. Quando ligado, o padrão manda **só a estrutura** (nomes de campo, contagens,
+resultado) — nunca nome, e-mail ou matrícula. O envio nunca atrasa nem derruba uma requisição:
+com o Langfuse fora do ar, tudo continua funcionando e um único aviso vai para o log.
+
+| Variável | Uso |
+|---|---|
+| `SGA_TI_LANGFUSE_URL` | Endereço do seu Langfuse (atenção: ele usa a porta 3000, a mesma do SGA-TI) |
+| `SGA_TI_LANGFUSE_CHAVE_PUBLICA` / `_SECRETA` | Chaves do projeto |
+| `SGA_TI_OBS_CONTEUDO` | `metadados` (padrão) ou `completo` — este último só com Langfuse próprio |
+
+O envio usa o endpoint **OpenTelemetry** do Langfuse, e não a API de ingestão, que é desligada em
+16/11/2026. Como o endpoint aceita OTLP em JSON, o exportador cabe em `fetch` — **nenhuma
+dependência nova**.
+
 ### Privacidade
 
 A tela de login traz o aviso de tratamento de dados e leva à página
@@ -231,6 +252,10 @@ Autenticação: `POST /api/auth/login` → `{ token }`; demais rotas usam `Autho
 | `POST /api/webhook/n8n` | Entrada do JSON da seção 10 do prompt (header `X-Api-Key`) |
 
 ### Webhook do n8n
+
+Fluxos prontos para importar estão em [`../n8n/`](../n8n/) — inclusive um que lê uma mensagem em
+texto, pede ao Claude que extraia o evento e registra aqui, sem inventar dado que a mensagem não
+trouxe.
 
 No fluxo do n8n, ligue a saída JSON do node de IA (com o prompt SGA-TI) a um node **HTTP Request**:
 
@@ -306,6 +331,7 @@ sga-ti/
 │   ├── registro.js         # registro de eventos de segurança
 │   ├── servico-eventos.js  # registro de eventos, aprovações, integridade, LGPD
 │   ├── n8n.js              # tradução do JSON da seção 10 → eventos internos
+│   ├── observabilidade.js  # exportador OTLP/JSON para o Langfuse (sem dependência)
 │   └── api.js              # rotas REST + papéis + webhook
 ├── migracoes/              # uma migração por arquivo: NNN-descricao.sql
 ├── DEPLOY.md               # primeiro deploy, atualização e plano de reversão
@@ -317,7 +343,8 @@ sga-ti/
 │   ├── sga-ti.service      # systemd: reinício automático, usuário e disco restritos
 │   ├── sga-ti-backup.*     # cópia diária (service + timer)
 │   ├── Caddyfile           # proxy com TLS automático (recomendado)
-│   └── nginx.conf          # alternativa com certbot
+│   ├── nginx.conf          # alternativa com certbot
+│   └── langfuse.md         # como acompanhar tudo pelo Langfuse
 ├── scripts/backup.js       # cópia de segurança (VACUUM INTO) + verificação
 ├── public/
 │   ├── index.html          # casca da aplicação
@@ -330,7 +357,8 @@ sga-ti/
     ├── seguranca.test.js   # 24 testes das proteções (incl. servidor real por HTTP)
     ├── deploy.test.js      # 13 testes de saúde, rotação e recusa no boot
     ├── contas.test.js      # 15 testes de senha, desativação, sessões e migrações
-    └── listas.test.js      # 12 testes de paginação e exportação
+    ├── listas.test.js      # 12 testes de paginação e exportação
+    └── observabilidade.test.js  # 12 testes do rastro (formato, privacidade, tolerância a falha)
 ```
 
 ## Antes de publicar

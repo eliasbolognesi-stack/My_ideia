@@ -61,6 +61,12 @@ jobs:
             console.log("ok: todo script vem de arquivo proprio");
           '
 
+      # Fluxo do n8n com conexão para um nó que não existe importa e falha só
+      # na hora de rodar — e a CI não tem n8n para descobrir isso por nós.
+      - name: Fluxos do n8n íntegros
+        working-directory: .
+        run: node n8n/verificar.mjs
+
       # O .env.example é modelo, não cofre. Se alguém colar uma chave de verdade
       # ali, ela entra no histórico do repositório para sempre.
       - name: Nenhum segredo no .env.example

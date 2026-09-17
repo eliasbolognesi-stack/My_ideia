@@ -1,0 +1,158 @@
+{
+  "name": "SGA-TI — monitor de saúde",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "16e1d257-fa94-460d-a9be-7bd726a85646",
+      "name": "A cada 5 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:3000/api/saude",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "acfbcaec-c7b5-4468-ac4a-052d2ec10148",
+      "name": "Perguntar se está vivo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Sem resposta também é informação: o fluxo precisa seguir para avisar."
+    },
+    {
+      "parameters": {
+        "jsCode": "// A rota /api/saude responde 503 de propósito em janela de manutenção — e isso\n// PRECISA aparecer, senão ninguém percebe que a manutenção ficou ligada.\nconst resposta = $input.first().json;\nconst codigo = $input.first().json.error ? 0 : 200;\n\nconst vivo = resposta.ok === true;\nconst emManutencao = resposta.manutencao === true;\n\nlet situacao = 'ok';\nlet detalhe = `versão ${resposta.versao}, banco ${resposta.banco}`;\nif (emManutencao) { situacao = 'manutencao'; detalhe = 'sistema em janela de manutenção'; }\nelse if (!vivo) { situacao = 'fora'; detalhe = resposta.banco ? `banco ${resposta.banco}` : 'sem resposta'; }\n\nreturn [{\n  json: {\n    situacao,\n    alerta: situacao !== 'ok',\n    mensagem: situacao === 'ok'\n      ? `SGA-TI no ar (${detalhe}).`\n      : `ATENÇÃO: SGA-TI ${situacao === 'manutencao' ? 'em manutenção' : 'FORA DO AR'} — ${detalhe}.`,\n    momento: new Date().toISOString(),\n    bruto: resposta,\n  },\n}];\n"
+      },
+      "id": "17d9ce9c-b4ba-4b1c-9215-fdb73b782951",
+      "name": "Avaliar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5aee67f5-e526-4b04-9b15-7c884403427b",
+              "leftValue": "={{ $json.alerta }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d3fa7831-de34-45de-89a0-798c3355d4a0",
+      "name": "Algo errado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// LIGUE AQUI o seu canal de aviso (Slack, e-mail, Telegram…).\n// Este nó só prepara o texto; troque-o pelo nó do seu canal, ou\n// acrescente o nó depois dele.\nreturn [{ json: { texto: $json.mensagem, momento: $json.momento } }];\n"
+      },
+      "id": "6a787a2c-55ce-41ea-8c8b-6e0ec92f54eb",
+      "name": "Avisar o time",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "A cada 5 minutos": {
+      "main": [
+        [
+          {
+            "node": "Perguntar se está vivo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Perguntar se está vivo": {
+      "main": [
+        [
+          {
+            "node": "Avaliar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avaliar": {
+      "main": [
+        [
+          {
+            "node": "Algo errado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Algo errado?": {
+      "main": [
+        [
+          {
+            "node": "Avisar o time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
