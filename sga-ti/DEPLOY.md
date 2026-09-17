@@ -115,7 +115,7 @@ SGA_TI_FORCAR_HTTPS=1
 SGA_TI_ATRAS_PROXY=1
 SGA_TI_DB=/var/lib/sga-ti/sga-ti.db
 SGA_TI_LOG_SEGURANCA=/var/lib/sga-ti/seguranca.log
-SGA_TI_ADMIN_SENHA=<uma senha longa, só para o primeiro acesso>
+SGA_TI_ADMIN_SENHA=<uma senha longa, só para o primeiro acesso — o sistema exige a troca>
 SGA_TI_WEBHOOK_KEYS=<gerado no passo abaixo>
 SGA_TI_CONTATO_DPO=privacidade@suaempresa.com
 SGA_TI_DOMINIOS_EVIDENCIA=suaempresa.com,docs.suaempresa.com
@@ -218,7 +218,7 @@ Confira que funcionou:
 ```bash
 curl -I http://sga-ti.suaempresa.com          # deve responder 301 para https
 curl -s https://sga-ti.suaempresa.com/api/saude
-# {"ok":true,"versao":"1.3.0","banco":"ok","manutencao":false,...}
+# {"ok":true,"versao":"1.4.0","banco":"ok","manutencao":false,...}
 ```
 
 ---
@@ -276,7 +276,8 @@ sudo grep -c . /var/lib/sga-ti/seguranca.log              # eventos de seguranç
 
 ## 9. Conferência final (faça pelo navegador)
 
-- [ ] Entrar com `admin@local` e **trocar a senha** na hora.
+- [ ] Entrar com `admin@local`. O sistema **obriga** a trocar a senha antes de liberar qualquer
+      tela: a senha do primeiro boot aparece no `journalctl` e vale só para esse primeiro acesso.
 - [ ] Cadastrar os usuários reais, cada um com o papel certo.
 - [ ] Registrar uma **entrada** de teste e conferir que ela aparece na lista.
 - [ ] Abrir o ativo de teste e conferir a **trilha de auditoria**.
@@ -317,10 +318,13 @@ curl -s https://sga-ti.suaempresa.com/api/saude
 Leia o [`CHANGELOG.md`](CHANGELOG.md) da versão antes de atualizar: ele avisa quando alguma
 variável de ambiente muda.
 
-> **Sobre mudanças no banco:** hoje o esquema é criado na primeira subida e não existe sistema
-> de migração. Isso resolve o primeiro deploy e só ele — **a primeira alteração de coluna com
-> dados em produção precisa de um plano à parte**. Está anotado no `CHANGELOG.md` como pendência
-> antes da próxima mudança de esquema.
+> **Sobre mudanças no banco:** as migrações rodam sozinhas na subida, em ordem e dentro de
+> transação, e cada uma é aplicada **uma única vez** (o número aplicado fica no próprio arquivo do
+> banco, em `PRAGMA user_version`). Se uma falhar, ela é desfeita e o servidor **não sobe** — o
+> banco fica como estava. A linha `Banco: esquema N -> M` no log diz o que foi aplicado.
+>
+> Faça a cópia de segurança **antes** de atualizar, como no passo 1: migração desfeita devolve o
+> esquema, mas voltar para uma versão anterior do código com o esquema já migrado não é previsto.
 
 ---
 

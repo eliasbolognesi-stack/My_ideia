@@ -103,6 +103,10 @@ describe('limite de uso', () => {
 // Integração: servidor real
 // ---------------------------------------------------------------------------
 const SENHA_ADMIN = 'senha-de-teste-123';
+// A senha do primeiro admin nasce provisória: ela aparece no log do servidor,
+// então o sistema exige a troca antes de liberar qualquer rota. Os testes
+// abaixo fazem o mesmo caminho que um operador faria no primeiro acesso.
+const SENHA_ADMIN_NOVA = 'senha-trocada-no-primeiro-acesso-456';
 const CHAVE_ESTOQUE = 'chave-do-estoque-para-teste';
 
 function subirServidor(extras = {}) {
@@ -164,7 +168,17 @@ describe('servidor', () => {
       corpo: { email: 'admin@local', senha: SENHA_ADMIN },
     });
     assert.equal(login.status, 200);
+    assert.equal(login.corpo.usuario.senha_provisoria, true, 'o primeiro admin nasce com senha provisória');
     tokenAdmin = login.corpo.token;
+
+    // Troca a senha provisória. A sessão atual continua valendo, de propósito:
+    // quem acabou de trocar não precisa entrar de novo.
+    const troca = await pedir(servidor.base, '/api/me/senha', {
+      metodo: 'POST',
+      cabecalhos: { Authorization: `Bearer ${tokenAdmin}` },
+      corpo: { senha_atual: SENHA_ADMIN, senha_nova: SENHA_ADMIN_NOVA },
+    });
+    assert.equal(troca.status, 200, JSON.stringify(troca.corpo));
   });
 
   after(() => {
@@ -272,6 +286,11 @@ describe('servidor', () => {
       corpo: { email: 'pedro@empresa.com', senha: 'senha-forte-99' },
     });
     const comoPedro = { Authorization: `Bearer ${login.corpo.token}` };
+    // Senha que o admin digitou é provisória: Pedro troca antes de usar.
+    await pedir(servidor.base, '/api/me/senha', {
+      metodo: 'POST', cabecalhos: comoPedro,
+      corpo: { senha_atual: 'senha-forte-99', senha_nova: 'senha-do-pedro-77' },
+    });
 
     // Mesmo pedindo explicitamente o histórico de outra pessoa, o escopo é forçado.
     const doOperador = await pedir(servidor.base, '/api/auditoria/eventos?colaborador=Administrador', { cabecalhos: comoPedro });

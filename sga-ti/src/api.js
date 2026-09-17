@@ -70,6 +70,47 @@ function termoBusca(texto) {
   return `%${limpo}%`;
 }
 
+// Paginação. Antes as listas cortavam em silêncio (500 ativos, 300 eventos):
+// numa empresa com 600 máquinas a tela mostrava 500 e ninguém sabia. Agora o
+// corte é declarado, e quem pede sabe que existe mais.
+const POR_PAGINA_PADRAO = 100;
+const POR_PAGINA_MAXIMO = 500;
+
+function paginacao(consulta) {
+  const pagina = Math.max(1, Math.floor(Number(consulta.pagina)) || 1);
+  const pedido = Math.floor(Number(consulta.por_pagina)) || POR_PAGINA_PADRAO;
+  const porPagina = Math.min(POR_PAGINA_MAXIMO, Math.max(1, pedido));
+  return { pagina, porPagina, deslocamento: (pagina - 1) * porPagina };
+}
+
+// Uma célula de CSV que começa com =, +, - ou @ é executada como fórmula pelo
+// Excel ao abrir o arquivo. O apóstrofo à frente neutraliza isso sem mudar o
+// que a pessoa lê.
+function celulaCsv(valor) {
+  if (valor === null || valor === undefined) return '""';
+  let texto = String(valor);
+  if (/^[=+\-@\t\r]/.test(texto)) texto = `'${texto}`;
+  return `"${texto.replace(/"/g, '""')}"`;
+}
+
+function montarCsv(colunas, linhas) {
+  const cabecalho = colunas.map((c) => celulaCsv(c.titulo)).join(';');
+  const corpo = linhas.map((linha) => colunas.map((c) => celulaCsv(c.valor(linha))).join(';'));
+  // Ponto e vírgula e BOM: é o que faz o Excel em português abrir o arquivo em
+  // colunas e com os acentos certos, sem ninguém precisar importar à mão.
+  return `\uFEFF${[cabecalho, ...corpo].join('\r\n')}\r\n`;
+}
+
+function responderCsv(res, nomeArquivo, conteudo) {
+  res.writeHead(200, {
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${nomeArquivo}"`,
+    'Cache-Control': 'no-store',
+  });
+  res.end(conteudo);
+  return null; // já respondido
+}
+
 function extrairToken(req) {
   const cabecalho = req.headers['authorization'] || '';
   return cabecalho.startsWith('Bearer ') ? cabecalho.slice(7) : null;
@@ -135,12 +176,12 @@ rota('POST', '/api/auth/login', { publica: true }, ({ db, corpo, ip }) => {
   return sessao;
 });
 
-rota('POST', '/api/auth/logout', {}, ({ db, token }) => {
+rota('POST', '/api/auth/logout', { senhaProvisoriaOk: true }, ({ db, token }) => {
   autenticacao.encerrarSessao(db, token);
   return { ok: true };
 });
 
-rota('GET', '/api/me', {}, ({ usuario }) => ({ usuario, empresa: config.empresa }));
+rota('GET', '/api/me', { senhaProvisoriaOk: true }, ({ usuario }) => ({ usuario, empresa: config.empresa }));
 
 rota('GET', '/api/dashboard', {}, ({ db }) => {
   const porStatus = {};
@@ -160,7 +201,9 @@ rota('GET', '/api/dashboard', {}, ({ db }) => {
   return { por_status: porStatus, aprovacoes_pendentes: pendencias, ultimos_eventos: ultimosEventos };
 });
 
-rota('GET', '/api/ativos', {}, ({ db, consulta }) => {
+// O filtro fica numa função só: a lista, a contagem e a exportação precisam
+// enxergar exatamente o mesmo recorte, senão o CSV não bate com a tela.
+function filtroDeAtivos(consulta) {
   const clausulas = [];
   const valores = [];
   if (consulta.status) {
@@ -175,10 +218,40 @@ rota('GET', '/api/ativos', {}, ({ db, consulta }) => {
     const termo = termoBusca(consulta.q);
     valores.push(termo, termo, termo, termo, termo);
   }
-  const onde = clausulas.length ? `WHERE ${clausulas.join(' AND ')}` : '';
-  return {
-    ativos: db.prepare(`SELECT * FROM ativos ${onde} ORDER BY atualizado_em DESC LIMIT 500`).all(...valores),
-  };
+  return { onde: clausulas.length ? `WHERE ${clausulas.join(' AND ')}` : '', valores };
+}
+
+rota('GET', '/api/ativos', {}, ({ db, consulta }) => {
+  const { onde, valores } = filtroDeAtivos(consulta);
+  const { pagina, porPagina, deslocamento } = paginacao(consulta);
+  const { total } = db.prepare(`SELECT COUNT(*) AS total FROM ativos ${onde}`).get(...valores);
+  const ativos = db
+    .prepare(`SELECT * FROM ativos ${onde} ORDER BY atualizado_em DESC LIMIT ? OFFSET ?`)
+    .all(...valores, porPagina, deslocamento);
+  return { ativos, total, pagina, por_pagina: porPagina, paginas: Math.max(1, Math.ceil(total / porPagina)) };
+});
+
+const COLUNAS_ATIVOS_CSV = [
+  { titulo: 'Patrimônio', valor: (a) => a.patrimonio },
+  { titulo: 'Número de série', valor: (a) => a.numero_serie },
+  { titulo: 'Tipo', valor: (a) => a.tipo_equipamento },
+  { titulo: 'Fabricante', valor: (a) => a.fabricante },
+  { titulo: 'Modelo', valor: (a) => a.modelo },
+  { titulo: 'Situação', valor: (a) => a.status_atual },
+  { titulo: 'Localização', valor: (a) => a.localizacao_atual },
+  { titulo: 'Responsável', valor: (a) => a.responsavel_atual },
+  { titulo: 'Entrada', valor: (a) => a.data_entrada },
+  { titulo: 'Última atualização', valor: (a) => a.atualizado_em },
+];
+
+rota('GET', '/api/ativos.csv', {}, ({ db, consulta, res, usuario, ip }) => {
+  const { onde, valores } = filtroDeAtivos(consulta);
+  const linhas = db.prepare(`SELECT * FROM ativos ${onde} ORDER BY patrimonio`).all(...valores);
+  // `recurso`, e não `tipo`: `tipo` é a chave do próprio evento de segurança e
+  // sobrescrevê-la faria a exportação sumir do registro com outro nome.
+  seguranca('exportacao', { ip, usuario: usuario.email, recurso: 'ativos', linhas: linhas.length });
+  const data = new Date().toISOString().slice(0, 10);
+  return responderCsv(res, `ativos-${data}.csv`, montarCsv(COLUNAS_ATIVOS_CSV, linhas));
 });
 
 rota('GET', '/api/ativos/:id', {}, ({ db, parametros }) => {
@@ -234,7 +307,10 @@ rota('POST', '/api/aprovacoes/:id/decisao', { papeis: ['aprovador', 'admin'] }, 
 // mostra o histórico de todos os colaboradores — fica restrita a aprovador e
 // admin; operador e técnico veem apenas o próprio histórico (minimização de
 // acesso, LGPD art. 6º).
-rota('GET', '/api/auditoria/eventos', {}, ({ db, consulta, usuario }) => {
+// O escopo por papel fica aqui, num lugar só: operador vê o próprio
+// histórico, aprovador e admin veem tudo. A lista e a exportação usam a mesma
+// função — se divergissem, o CSV mostraria o que a tela esconde.
+function filtroDeAuditoria(consulta, usuario) {
   const podeVerTodos = ['aprovador', 'admin'].includes(usuario.papel);
   const clausulas = [];
   const valores = [];
@@ -253,23 +329,78 @@ rota('GET', '/api/auditoria/eventos', {}, ({ db, consulta, usuario }) => {
     clausulas.push('e.ativo_id = ?');
     valores.push(Number(consulta.ativo_id));
   }
-  const onde = clausulas.length ? `WHERE ${clausulas.join(' AND ')}` : '';
   return {
+    onde: clausulas.length ? `WHERE ${clausulas.join(' AND ')}` : '',
+    valores,
     escopo: podeVerTodos ? 'completo' : 'proprio',
     colaborador,
-    eventos: db
-      .prepare(
-        `SELECT e.*, a.patrimonio, a.modelo FROM eventos e
-           JOIN ativos a ON a.id = e.ativo_id ${onde}
-          ORDER BY e.id DESC LIMIT 300`
-      )
-      .all(...valores)
-      .map((e) => ({ ...e, dados: JSON.parse(e.dados) })),
+  };
+}
+
+rota('GET', '/api/auditoria/eventos', {}, ({ db, consulta, usuario }) => {
+  const { onde, valores, escopo, colaborador } = filtroDeAuditoria(consulta, usuario);
+  const { pagina, porPagina, deslocamento } = paginacao(consulta);
+  const { total } = db
+    .prepare(`SELECT COUNT(*) AS total FROM eventos e JOIN ativos a ON a.id = e.ativo_id ${onde}`)
+    .get(...valores);
+  const eventos = db
+    .prepare(
+      `SELECT e.*, a.patrimonio, a.modelo FROM eventos e
+         JOIN ativos a ON a.id = e.ativo_id ${onde}
+        ORDER BY e.id DESC LIMIT ? OFFSET ?`
+    )
+    .all(...valores, porPagina, deslocamento)
+    .map((e) => ({ ...e, dados: JSON.parse(e.dados) }));
+
+  return {
+    escopo,
+    colaborador,
+    eventos,
+    total,
+    pagina,
+    por_pagina: porPagina,
+    paginas: Math.max(1, Math.ceil(total / porPagina)),
   };
 });
 
+const COLUNAS_AUDITORIA_CSV = [
+  { titulo: 'Evento', valor: (e) => e.id },
+  { titulo: 'Data e hora', valor: (e) => e.data_hora },
+  { titulo: 'Tipo', valor: (e) => e.tipo },
+  { titulo: 'Patrimônio', valor: (e) => e.patrimonio },
+  { titulo: 'Modelo', valor: (e) => e.modelo },
+  { titulo: 'Autor', valor: (e) => e.autor_nome },
+  { titulo: 'Situação anterior', valor: (e) => e.status_anterior },
+  { titulo: 'Situação nova', valor: (e) => e.status_novo },
+  { titulo: 'Evento corrigido', valor: (e) => e.evento_ref },
+  { titulo: 'Anonimizado', valor: (e) => (e.anonimizado ? 'sim' : 'não') },
+  { titulo: 'Dados', valor: (e) => JSON.stringify(e.dados) },
+  { titulo: 'Hash', valor: (e) => e.hash },
+];
+
+rota('GET', '/api/auditoria/eventos.csv', {}, ({ db, consulta, usuario, res, ip }) => {
+  const { onde, valores, escopo } = filtroDeAuditoria(consulta, usuario);
+  const linhas = db
+    .prepare(
+      `SELECT e.*, a.patrimonio, a.modelo FROM eventos e
+         JOIN ativos a ON a.id = e.ativo_id ${onde} ORDER BY e.id DESC`
+    )
+    .all(...valores)
+    .map((e) => ({ ...e, dados: JSON.parse(e.dados) }));
+
+  // A exportação da trilha é ela própria um evento de segurança: é por ela
+  // que dado pessoal sai do sistema (LGPD art. 18).
+  seguranca('exportacao', { ip, usuario: usuario.email, recurso: 'auditoria', escopo, linhas: linhas.length });
+  const data = new Date().toISOString().slice(0, 10);
+  return responderCsv(res, `auditoria-${data}.csv`, montarCsv(COLUNAS_AUDITORIA_CSV, linhas));
+});
+
 rota('GET', '/api/usuarios', { papeis: ['admin'] }, ({ db }) => ({
-  usuarios: db.prepare('SELECT id, nome, email, matricula, papel, ativo, criado_em FROM usuarios ORDER BY nome').all(),
+  usuarios: db.prepare(
+    `SELECT u.id, u.nome, u.email, u.matricula, u.papel, u.ativo, u.senha_provisoria, u.criado_em,
+            (SELECT COUNT(*) FROM sessoes s WHERE s.usuario_id = u.id AND s.expira_em > ?) AS sessoes_ativas
+       FROM usuarios u ORDER BY u.ativo DESC, u.nome`
+  ).all(new Date().toISOString()),
 }));
 
 rota('POST', '/api/usuarios', { papeis: ['admin'] }, ({ db, corpo, usuario }) => {
@@ -285,6 +416,88 @@ rota('POST', '/api/usuarios', { papeis: ['admin'] }, ({ db, corpo, usuario }) =>
     if (String(erro.message).includes('UNIQUE')) throw new ErroHttp(409, 'já existe usuário com esse e-mail');
     throw erro;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Ciclo de vida de conta
+//
+// Sem estas rotas, a senha definida por quem criou o usuário valia para
+// sempre, quem saía da empresa continuava entrando, e o manual de operação
+// mandava rodar SQL direto no banco de produção.
+// ---------------------------------------------------------------------------
+
+rota('POST', '/api/me/senha', { senhaProvisoriaOk: true }, ({ db, corpo, usuario, token, ip }) => {
+  const resultado = autenticacao.trocarSenha(
+    db, usuario.id, corpo.senha_atual, corpo.senha_nova, { manterSessao: token }
+  );
+  if (!resultado.ok) {
+    seguranca('troca_de_senha_recusada', { ip, usuario: usuario.email, motivo: resultado.erro });
+    throw new ErroHttp(422, resultado.erro);
+  }
+  seguranca('senha_trocada', {
+    ip, usuario: usuario.email, sessoes_encerradas: resultado.sessoesEncerradas,
+  });
+  return {
+    ok: true,
+    sessoes_encerradas: resultado.sessoesEncerradas,
+    aviso: resultado.sessoesEncerradas
+      ? `${resultado.sessoesEncerradas} outra(s) sessão(ões) foram encerradas`
+      : null,
+  };
+});
+
+function usuarioAlvo(db, parametros) {
+  const alvo = db
+    .prepare('SELECT id, nome, email, papel, ativo FROM usuarios WHERE id = ?')
+    .get(Number(parametros.id));
+  if (!alvo) throw new ErroHttp(404, 'usuário não encontrado');
+  return alvo;
+}
+
+rota('POST', '/api/usuarios/:id/senha', { papeis: ['admin'] }, ({ db, corpo, parametros, usuario, ip }) => {
+  const alvo = usuarioAlvo(db, parametros);
+  const resultado = autenticacao.definirSenha(db, alvo.id, corpo.senha_nova, { provisoria: true });
+  if (!resultado.ok) throw new ErroHttp(422, resultado.erro);
+
+  seguranca('senha_redefinida_por_admin', {
+    ip, por: usuario.email, alvo: alvo.email, sessoes_encerradas: resultado.sessoesEncerradas,
+  });
+  return {
+    ok: true,
+    sessoes_encerradas: resultado.sessoesEncerradas,
+    aviso: 'a pessoa terá de trocar esta senha no próximo acesso',
+  };
+});
+
+rota('POST', '/api/usuarios/:id/situacao', { papeis: ['admin'] }, ({ db, corpo, parametros, usuario, ip }) => {
+  const alvo = usuarioAlvo(db, parametros);
+  const ativar = corpo.ativo === true || corpo.ativo === 'true' || corpo.ativo === 1;
+
+  // Duas travas contra o sistema ficar sem dono — e contra o engano mais
+  // comum, que é o admin desativar a própria conta e perder o acesso.
+  if (!ativar && alvo.id === usuario.id) {
+    throw new ErroHttp(422, 'você não pode desativar a própria conta');
+  }
+  if (!ativar && alvo.papel === 'admin' && autenticacao.totalDeAdminsAtivos(db) <= 1) {
+    throw new ErroHttp(422, 'este é o último administrador ativo: promova outro antes de desativá-lo');
+  }
+
+  const resultado = autenticacao.definirSituacao(db, alvo.id, ativar);
+  if (!resultado.ok) throw new ErroHttp(422, resultado.erro);
+
+  seguranca(ativar ? 'usuario_ativado' : 'usuario_desativado', {
+    ip, por: usuario.email, alvo: alvo.email, sessoes_encerradas: resultado.sessoesEncerradas,
+  });
+  return { ok: true, ativo: ativar, sessoes_encerradas: resultado.sessoesEncerradas };
+});
+
+rota('POST', '/api/usuarios/:id/sessoes', { papeis: ['admin'] }, ({ db, parametros, usuario, ip }) => {
+  const alvo = usuarioAlvo(db, parametros);
+  const encerradas = autenticacao.encerrarSessoesDoUsuario(db, alvo.id);
+  seguranca('sessoes_encerradas_por_admin', {
+    ip, por: usuario.email, alvo: alvo.email, sessoes_encerradas: encerradas,
+  });
+  return { ok: true, sessoes_encerradas: encerradas };
 });
 
 rota('POST', '/api/lgpd/anonimizar', { papeis: ['admin'] }, ({ db, usuario }) => {
@@ -369,15 +582,29 @@ function despachar(db, req, res, url, corpo) {
         });
         throw new ErroHttp(403, `ação restrita aos papéis: ${r.opcoes.papeis.join(', ')}`);
       }
+      // Senha provisória tranca o sistema até ser trocada. Enquanto ela vale,
+      // duas pessoas podem entrar com a mesma conta — e um evento registrado
+      // aí não prova quem o registrou, que é o ponto da trilha imutável.
+      // 428 ("pré-condição exigida") é o código para "faça isto antes".
+      if (usuario.senha_provisoria && !r.opcoes.senhaProvisoriaOk) {
+        throw new ErroHttp(428, 'troque a senha provisória antes de usar o sistema');
+      }
     }
 
     // Limpeza da entrada: remove caracteres invisíveis e limita o tamanho de
-    // cada campo antes de qualquer validação. A senha fica de fora para não
-    // alterar silenciosamente o que a pessoa digitou.
-    const senhaOriginal = corpo && typeof corpo === 'object' ? corpo.senha : undefined;
+    // cada campo antes de qualquer validação. Campo de senha fica de fora, para
+    // não alterar em silêncio o que a pessoa digitou — inclusive senha_atual e
+    // senha_nova, senão a troca falharia sem explicação para quem usa um
+    // gerenciador de senhas com caracteres incomuns.
+    const senhasOriginais = {};
+    if (corpo && typeof corpo === 'object') {
+      for (const campo of Object.keys(corpo)) {
+        if (campo === 'senha' || campo.startsWith('senha_')) senhasOriginais[campo] = corpo[campo];
+      }
+    }
     const relatorio = { suspeitos: 0 };
     const corpoLimpo = limparProfundo(corpo, relatorio) || {};
-    if (senhaOriginal !== undefined) corpoLimpo.senha = senhaOriginal;
+    Object.assign(corpoLimpo, senhasOriginais);
     if (relatorio.suspeitos > 0) {
       seguranca('texto_com_caracteres_ocultos', {
         ip, rota: url.pathname, campos: relatorio.suspeitos,

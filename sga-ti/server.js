@@ -6,7 +6,7 @@ const path = require('node:path');
 
 const config = require('./src/config');
 const { abrirBanco } = require('./src/db');
-const { garantirAdminInicial } = require('./src/auth');
+const { garantirAdminInicial, limparSessoesExpiradas } = require('./src/auth');
 const { despachar, ErroHttp, ErroDeValidacao } = require('./src/api');
 const { seguranca } = require('./src/registro');
 
@@ -80,14 +80,49 @@ function validarConfiguracao() {
 
 validarConfiguracao();
 
-const db = abrirBanco(config.caminhoBanco);
+// Se uma migração falhar, o banco fica como estava (a transação desfaz) e o
+// servidor NÃO sobe: melhor não atender do que atender com o esquema pela
+// metade e gravar evento que depois ninguém consegue ler.
+let db;
+try {
+  db = abrirBanco(config.caminhoBanco);
+} catch (erro) {
+  const traco = '='.repeat(70);
+  console.error('');
+  console.error(traco);
+  console.error('BANCO DE DADOS NAO PODE SER ABERTO - o SGA-TI nao vai subir:');
+  console.error('');
+  console.error(`  ${erro.message}`);
+  console.error('');
+  console.error(`  Banco: ${config.caminhoBanco}`);
+  console.error('  Nada foi alterado. Restaure a cópia mais recente se precisar (OPERACAO.md).');
+  console.error(traco);
+  console.error('');
+  process.exit(1);
+}
+
+// Sessão vencida só saía do banco quando alguém tentava usá-la: quem fecha o
+// navegador e não volta deixava a linha lá para sempre. Uma varredura na
+// subida e outra por dia bastam — não há pressa, só não pode crescer sem fim.
+const varridas = limparSessoesExpiradas(db);
+if (varridas) console.log(`Sessões expiradas removidas: ${varridas}`);
+const varreduraDiaria = setInterval(() => {
+  try {
+    limparSessoesExpiradas(db);
+  } catch (erro) {
+    console.error(`[sessoes] varredura falhou: ${erro.message}`);
+  }
+}, 24 * 3600 * 1000);
+// unref: esta tarefa não pode segurar o processo no ar na hora de encerrar.
+varreduraDiaria.unref();
 
 const credenciais = garantirAdminInicial(db, config.senhaAdminInicial);
 if (credenciais) {
   console.log('==============================================================');
   console.log('Primeiro boot: usuário administrador criado.');
   console.log(`  e-mail: ${credenciais.email}`);
-  console.log(`  senha : ${credenciais.senha}${credenciais.gerada ? '  (gerada — troque após o primeiro acesso)' : ''}`);
+  console.log(`  senha : ${credenciais.senha}${credenciais.gerada ? '  (gerada)' : ''}`);
+  console.log('  Esta senha é PROVISÓRIA: o sistema exige a troca no primeiro acesso.');
   console.log('==============================================================');
 }
 
@@ -215,9 +250,16 @@ const servidor = http.createServer(async (req, res) => {
     }
     const corpo = req.method === 'GET' ? {} : await lerCorpo(req);
     const resultado = despachar(db, req, res, url, corpo);
-    responderJson(res, 200, resultado);
+    // Uma rota que responde por conta própria (a exportação CSV escreve o
+    // arquivo direto) já mandou os cabeçalhos; responder de novo aqui
+    // derrubaria a requisição no meio.
+    if (!res.headersSent) responderJson(res, 200, resultado);
   } catch (erro) {
-    if (erro instanceof ErroDeValidacao) {
+    if (res.headersSent) {
+      // Resposta já começou a sair: não dá para trocar o código de status.
+      console.error(`[erro] ${req.method} ${url.pathname} depois de responder:`, erro);
+      res.end();
+    } else if (erro instanceof ErroDeValidacao) {
       responderJson(res, 422, { erro: 'validação falhou', detalhes: erro.erros });
     } else if (erro instanceof ErroHttp) {
       responderJson(res, erro.status, { erro: erro.message });

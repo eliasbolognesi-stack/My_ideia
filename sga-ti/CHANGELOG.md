@@ -8,6 +8,61 @@ ambiente ficam marcadas em negrito**, e são elas que fazem um deploy falhar em 
 
 ---
 
+## [1.4.0] — 2026-09-17 — Ciclo de vida de conta, migrações e exportação
+
+O levantamento de pendências encontrou uma contradição: **o manual de operação e o guia de deploy
+mandavam trocar a senha de uma conta comprometida, e o sistema não tinha como trocar senha
+nenhuma.** Quem criava o usuário definia a senha e ela nunca mudava — ou seja, o administrador
+sabia a senha de todo mundo, o que corrói a não-repudiação que a trilha imutável existe para
+garantir. Esta versão fecha isso.
+
+### Adicionado
+- **Troca da própria senha** (`POST /api/me/senha`) e tela **Minha conta**. Trocar a senha
+  **derruba as outras sessões** — é isso que faz a troca resolver um vazamento de verdade; a
+  sessão de quem trocou continua aberta.
+- **Senha provisória.** Toda senha definida por outra pessoa (a do primeiro admin, que aparece no
+  log do servidor, e toda redefinição feita por um administrador) nasce provisória: o sistema
+  responde **428** em todas as rotas até a troca, liberando só `/api/me`, a troca em si e a saída.
+- **Ações de administrador na tela de Usuários**, no lugar do SQL cru que o `OPERACAO.md` mandava
+  rodar no banco de produção: redefinir senha, ativar/desativar e encerrar sessões. Desativar
+  corta o acesso **na hora**, inclusive nas sessões abertas, e não apaga nada do histórico.
+  A lista passou a mostrar situação, sessões abertas e quem está com senha provisória.
+- Duas travas contra o sistema ficar sem dono: ninguém desativa a própria conta, e o último
+  administrador ativo não pode ser desativado.
+- **Sistema de migração de esquema** (`src/migracoes.js` + pasta `migracoes/`): arquivos numerados,
+  aplicados **uma única vez**, em ordem e dentro de transação, com o número gravado em
+  `PRAGMA user_version`. Migração que falha é desfeita e **o servidor não sobe** — melhor não
+  atender do que atender com o esquema pela metade. Era a pendência anotada em 1.3.0.
+- **Exportação em CSV** do inventário (`GET /api/ativos.csv`) e da trilha
+  (`GET /api/auditoria/eventos.csv`), com os mesmos filtros e o mesmo escopo por papel da tela —
+  um operador exporta só o próprio histórico. Com BOM e ponto e vírgula, o Excel em português abre
+  em colunas e com os acentos certos. Toda exportação fica registrada: é por ela que dado pessoal
+  sai do sistema (LGPD art. 18).
+- **Varredura de sessões expiradas** na subida e uma vez por dia.
+- 27 testes novos (contas, migrações, paginação e exportação). Total: **86**.
+
+### Corrigido
+- **As listas cortavam em silêncio.** Ativos parava em 500 e a auditoria em 300 sem avisar: numa
+  empresa com 600 máquinas a tela mostrava 500 e ninguém sabia — e na auditoria, "não achei o
+  evento" podia ser o corte, não a ausência. Agora a resposta traz o **total** e a tela mostra
+  *"Exibindo 1–5 de 7"*, com paginação pelo endereço (`#/ativos?pagina=2`).
+- Célula de CSV começando com `=`, `+`, `-` ou `@` era executada como fórmula pelo Excel ao abrir
+  o arquivo; agora é neutralizada.
+- O campo da senha provisória tinha **dois nomes** (`senha_provisoria` no login e
+  `senhaProvisoria` em `/api/me`), e por isso a tela de conta não mostrava o aviso explicando por
+  que o sistema estava travado.
+- A chave `tipo` no registro da exportação sobrescrevia o tipo do próprio evento de segurança,
+  fazendo a exportação sumir do registro com outro nome.
+
+### Segurança
+- O diálogo de confirmação ganhou campo de senha de verdade (antes só havia campo de texto longo,
+  que mostraria a senha na tela).
+- A limpeza de entrada deixa de alterar **qualquer** campo de senha (`senha`, `senha_atual`,
+  `senha_nova`), e não só `senha` — senão a troca falharia sem explicação para quem usa
+  gerenciador de senhas com caracteres incomuns.
+
+---
+
 ## [1.3.0] — 2026-09-16 — Prontidão para produção
 
 O software já estava pronto; o que faltava era o que mantém um sistema vivo. Nenhuma regra de

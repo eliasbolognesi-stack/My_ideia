@@ -50,6 +50,13 @@ async function api(caminho, opcoes = {}) {
     sair({ motivo: MSG_SESSAO_EXPIRADA, lembrarRota: true });
     throw new Error('sessão expirada');
   }
+  // 428: a senha ainda é provisória e o sistema só libera a troca. Em vez de
+  // mostrar um erro seco em cada tela, leva direto para onde se resolve.
+  if (resposta.status === 428) {
+    if (estado.usuario) estado.usuario.senha_provisoria = true;
+    if (lerRota().nome !== 'conta') irPara(endereco('conta'));
+    throw new Error('senha provisória');
+  }
   if (!resposta.ok) {
     // A mensagem fica curta; os campos que faltam vão em `detalhes` e são
     // renderizados como lista pelo componente de aviso.
@@ -168,6 +175,85 @@ function limparAviso(alvo) {
   el.hidden = true;
 }
 
+// Rodapé honesto da tabela: diz quantos itens existem, não só quantos couberam
+// na tela. Antes a lista cortava em silêncio e ninguém sabia que havia mais.
+function htmlPaginacao(nome, resposta, filtros, porPaginaNoEndereco = '') {
+  const { total = 0, pagina = 1, paginas = 1, por_pagina: porPagina = 0 } = resposta;
+  const primeiro = total === 0 ? 0 : (pagina - 1) * porPagina + 1;
+  const ultimo = Math.min(total, pagina * porPagina);
+  // O tamanho da página segue nos links: sem isso, ir para a próxima página
+  // voltaria ao tamanho padrão e a lista pularia itens.
+  const ir = (n) => endereco(nome, {
+    filtros: { ...filtros, por_pagina: porPaginaNoEndereco, pagina: n > 1 ? n : '' },
+  });
+
+  return `
+    <div class="paginacao">
+      <span class="paginacao-contagem">
+        ${total === 0 ? 'Nenhum resultado'
+          : `Exibindo <strong>${primeiro}–${ultimo}</strong> de <strong>${total}</strong>`}
+        ${paginas > 1 ? ` · página ${pagina} de ${paginas}` : ''}
+      </span>
+      ${paginas > 1 ? `
+        <span class="paginacao-botoes">
+          ${pagina > 1 ? `<a class="botao pequeno" href="${ir(pagina - 1)}" rel="prev">← Anterior</a>` : ''}
+          ${pagina < paginas ? `<a class="botao pequeno" href="${ir(pagina + 1)}" rel="next">Próxima →</a>` : ''}
+        </span>` : ''}
+    </div>`;
+}
+
+// O endereço do CSV carrega os mesmos filtros da tela: o arquivo baixado é
+// exatamente o que a pessoa está vendo, sem o corte da página.
+function enderecoExportacao(caminho, filtros) {
+  const params = new URLSearchParams();
+  for (const [chave, valor] of Object.entries(filtros)) {
+    if (valor !== undefined && valor !== null && String(valor).trim() !== '') params.set(chave, valor);
+  }
+  const consulta = params.toString();
+  return `${caminho}${consulta ? `?${consulta}` : ''}`;
+}
+
+// Um <a href> comum não serve aqui: a credencial de sessão viaja no cabeçalho
+// Authorization, que um link não manda — o servidor responderia 401. E pôr o
+// token no endereço deixaria a credencial no histórico do navegador e no
+// registro de qualquer proxy no caminho. Então busca-se o arquivo com a
+// credencial e entrega-se o resultado ao navegador.
+async function baixarCsv(botao) {
+  const caminho = botao.dataset.exportar;
+  await comBotaoOcupado(botao, 'Preparando…', async () => {
+    const resposta = await fetch(caminho, {
+      headers: estado.token ? { Authorization: `Bearer ${estado.token}` } : {},
+    });
+    if (resposta.status === 401) { sair({ motivo: MSG_SESSAO_EXPIRADA, lembrarRota: true }); return; }
+    if (!resposta.ok) {
+      mostrarAviso('#retorno-exportacao', 'erro', 'Não foi possível gerar o arquivo. Tente de novo.');
+      return;
+    }
+
+    // O nome vem do servidor (Content-Disposition), com o do endereço como reserva.
+    const disposicao = resposta.headers.get('content-disposition') || '';
+    const casa = /filename="([^"]+)"/.exec(disposicao);
+    const nome = casa ? casa[1] : caminho.split('/').pop().split('?')[0];
+
+    const endereco = URL.createObjectURL(await resposta.blob());
+    const link = document.createElement('a');
+    link.href = endereco;
+    link.download = nome;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Sem isto o arquivo fica preso na memória da aba até fechá-la.
+    setTimeout(() => URL.revokeObjectURL(endereco), 10000);
+  });
+}
+
+// Um ouvinte só, no contêiner que nunca é substituído — cada tela apenas
+// declara o botão. A política de conteúdo é estrita: nada de onclick no HTML.
+document.addEventListener('click', (evento) => {
+  const botao = evento.target.closest('[data-exportar]');
+  if (botao) baixarCsv(botao);
+});
+
 function blocoVazio(titulo, texto, acao) {
   return `<div class="vazio">
       <p class="vazio-titulo">${escapar(titulo)}</p>
@@ -216,7 +302,10 @@ function confirmarDialogo({ titulo, texto, rotuloOk = 'Confirmar', perigo = fals
         <h3>${escapar(titulo)}</h3>
         ${texto ? `<p class="dialogo-texto">${escapar(texto)}</p>` : ''}
         ${campo ? `<label>${escapar(campo.rotulo)}
-            <textarea name="valor" rows="3" placeholder="${escapar(campo.placeholder || '')}"></textarea>
+            ${campo.tipo === 'password' || campo.tipo === 'text'
+              ? `<input name="valor" type="${campo.tipo}" ${campo.tipo === 'password' ? 'autocomplete="new-password"' : ''}
+                        placeholder="${escapar(campo.placeholder || '')}">`
+              : `<textarea name="valor" rows="3" placeholder="${escapar(campo.placeholder || '')}"></textarea>`}
           </label>
           <div id="dialogo-erro" hidden></div>` : ''}
         <div class="dialogo-acoes">
@@ -235,9 +324,17 @@ function confirmarDialogo({ titulo, texto, rotuloOk = 'Confirmar', perigo = fals
     formulario.addEventListener('submit', (evento) => {
       evento.preventDefault();
       if (!campo) return concluir({ valor: '' });
-      const valor = formulario.elements.valor.value.trim();
+      // Senha não leva trim: espaço no começo ou no fim é parte dela, e cortar
+      // em silêncio faria a pessoa não conseguir entrar depois.
+      const bruto = formulario.elements.valor.value;
+      const valor = campo.tipo === 'password' ? bruto : bruto.trim();
       if (campo.obrigatorio && !valor) {
         mostrarAviso('#dialogo-erro', 'erro', campo.mensagemObrigatoria || 'Este campo é obrigatório.');
+        formulario.elements.valor.focus();
+        return;
+      }
+      if (campo.minimo && valor.length < campo.minimo) {
+        mostrarAviso('#dialogo-erro', 'erro', `Use pelo menos ${campo.minimo} caracteres.`);
         formulario.elements.valor.focus();
         return;
       }
@@ -311,6 +408,16 @@ function entrarNoApp() {
     `<strong>${escapar(estado.usuario.nome)}</strong>${escapar(estado.usuario.papel)}`;
   $('#menu-usuarios').hidden = estado.usuario.papel !== 'admin';
 
+  // Senha provisória manda em tudo: enquanto ela valer, a única tela útil é a
+  // da troca. Guardar o destino para depois evitaria perder o link que a
+  // pessoa abriu, mas ela ainda precisa trocar a senha antes de chegar lá.
+  if (estado.usuario.senha_provisoria) {
+    const alvo = endereco('conta');
+    if (location.hash !== alvo) location.hash = alvo;
+    else aplicarRota();
+    return;
+  }
+
   const destino = estado.rotaPretendida;
   estado.rotaPretendida = null;
   if (destino && destino !== location.hash) location.hash = destino;
@@ -357,6 +464,7 @@ const ROTAS = {
   aprovacoes: { tela: () => telaAprovacoes(), titulo: 'Aprovações', menu: 'aprovacoes' },
   auditoria: { tela: (r) => telaAuditoria(r), titulo: 'Auditoria', menu: 'auditoria' },
   usuarios: { tela: () => telaUsuarios(), titulo: 'Usuários', menu: 'usuarios' },
+  conta: { tela: () => telaConta(), titulo: 'Minha conta', menu: 'conta' },
 };
 
 function lerRota() {
@@ -385,6 +493,15 @@ function irPara(hash) {
 function aplicarRota() {
   if (!estado.usuario) return;
   const rota = lerRota();
+
+  // Com senha provisória, só a tela de conta funciona. Desviar aqui evita
+  // disparar uma requisição que o servidor já vai recusar com 428 — o que
+  // aparecia como erro no console do navegador sem nenhum motivo útil.
+  if (estado.usuario.senha_provisoria && rota.nome !== 'conta') {
+    irPara(endereco('conta'));
+    return;
+  }
+
   const config = ROTAS[rota.nome];
 
   document.querySelectorAll('#menu a[data-tela]').forEach((a) => {
@@ -408,7 +525,7 @@ function aplicarRota() {
       }
     })
     .catch((erro) => {
-      if (erro.message === 'sessão expirada') return;
+      if (erro.message === 'sessão expirada' || erro.message === 'senha provisória') return;
       $('#conteudo').innerHTML = `<div class="cartao">${htmlAviso('erro', erro.message, erro.detalhes)}</div>`;
     });
 }
@@ -478,10 +595,15 @@ async function telaAtivos(rota) {
     q: rota.params.get('q') || '',
     status: rota.params.get('status') || '',
   };
+  const pagina = rota.params.get('pagina') || '';
+  const porPagina = rota.params.get('por_pagina') || '';
   const parametros = new URLSearchParams();
   if (filtros.status) parametros.set('status', filtros.status);
   if (filtros.q) parametros.set('q', filtros.q);
-  const { ativos } = await api(`/api/ativos?${parametros}`);
+  if (pagina) parametros.set('pagina', pagina);
+  if (porPagina) parametros.set('por_pagina', porPagina);
+  const resposta = await api(`/api/ativos?${parametros}`);
+  const { ativos } = resposta;
 
   const STATUS_TODOS = ['Em estoque', 'Em formatação', 'Em uso', 'Em manutenção', 'Reservado para descarte', 'Descartado'];
   const opcoes = STATUS_TODOS.map((s) => `<option value="${s}" ${filtros.status === s ? 'selected' : ''}>${s}</option>`).join('');
@@ -507,7 +629,10 @@ async function telaAtivos(rota) {
       </select>
       <button class="botao" type="submit">Filtrar</button>
       ${comFiltro ? `<a class="botao discreto" href="${endereco('ativos')}">Limpar</a>` : ''}
+      <button class="botao discreto" type="button"
+              data-exportar="${escapar(enderecoExportacao('/api/ativos.csv', filtros))}">Exportar CSV</button>
     </form>
+    <div id="retorno-exportacao" hidden></div>
     <div class="cartao">
       ${linhas ? `<div class="rolagem-tabela">
         <table>
@@ -515,7 +640,7 @@ async function telaAtivos(rota) {
           <tbody id="corpo-ativos">${linhas}</tbody>
         </table>
       </div>
-      <p class="rodape-tabela">${ativos.length} equipamento(s)${comFiltro ? ' para este filtro' : ''}.</p>`
+      ${htmlPaginacao('ativos', resposta, filtros, porPagina)}`
       : blocoVazio(
         comFiltro ? 'Nenhum ativo para esse filtro' : 'Nenhum ativo cadastrado',
         comFiltro
@@ -897,10 +1022,15 @@ async function telaAuditoria(rota) {
     colaborador: rota.params.get('colaborador') || '',
     tipo: rota.params.get('tipo') || '',
   };
+  const pagina = rota.params.get('pagina') || '';
+  const porPagina = rota.params.get('por_pagina') || '';
   const parametros = new URLSearchParams();
   if (filtros.colaborador) parametros.set('colaborador', filtros.colaborador);
   if (filtros.tipo) parametros.set('tipo', filtros.tipo);
-  const { eventos, escopo, colaborador } = await api(`/api/auditoria/eventos?${parametros}`);
+  if (pagina) parametros.set('pagina', pagina);
+  if (porPagina) parametros.set('por_pagina', porPagina);
+  const resposta = await api(`/api/auditoria/eventos?${parametros}`);
+  const { eventos, escopo, colaborador } = resposta;
   const apenasProprio = escopo === 'proprio';
 
   const tipos = ['', 'Recebimento', 'Formatacao', 'Movimentacao', 'Manutencao', 'Descarte', 'Retificacao'];
@@ -926,7 +1056,10 @@ async function telaAuditoria(rota) {
              aria-label="Filtrar por colaborador" value="${escapar(filtros.colaborador)}" ${apenasProprio ? 'disabled' : ''}>
       <select id="filtro-tipo" aria-label="Filtrar por tipo de evento">${tipos.map((t) => `<option value="${t}" ${filtros.tipo === t ? 'selected' : ''}>${t ? escapar(rotuloEvento(t)) : 'Todos os eventos'}</option>`).join('')}</select>
       <button class="botao" type="submit">Consultar</button>
+      <button class="botao discreto" type="button"
+              data-exportar="${escapar(enderecoExportacao('/api/auditoria/eventos.csv', filtros))}">Exportar CSV</button>
     </form>
+    <div id="retorno-exportacao" hidden></div>
     <div class="cartao">
       ${linhas ? `<div class="rolagem-tabela">
         <table>
@@ -934,7 +1067,7 @@ async function telaAuditoria(rota) {
           <tbody>${linhas}</tbody>
         </table>
       </div>
-      <p class="rodape-tabela">${eventos.length} evento(s)${eventos.length === 300 ? ' — mostrando os 300 mais recentes' : ''}.</p>`
+      ${htmlPaginacao('auditoria', resposta, filtros, porPagina)}`
       : blocoVazio('Nenhum evento encontrado', 'Ajuste o nome do colaborador ou o tipo de evento e consulte de novo.')}
     </div>`;
 
@@ -949,22 +1082,113 @@ async function telaAuditoria(rota) {
   });
 }
 
+async function telaConta() {
+  const { usuario } = await api('/api/me');
+  estado.usuario = usuario;
+  const provisoria = Boolean(usuario.senha_provisoria);
+
+  $('#conteudo').innerHTML = `
+    <h2>Minha conta</h2>
+    ${provisoria ? htmlAviso('alerta',
+      'Sua senha é provisória: ela foi definida por outra pessoa e apareceu no registro do sistema. '
+      + 'Troque agora — o restante do sistema fica disponível assim que você concluir.') : ''}
+    <div class="cartao">
+      <h3>${escapar(usuario.nome)}</h3>
+      <p class="sub">${escapar(usuario.email)} · papel <strong>${escapar(usuario.papel)}</strong>
+         ${usuario.matricula ? ` · matrícula ${escapar(usuario.matricula)}` : ''}</p>
+    </div>
+    <div class="cartao">
+      <h3>Trocar minha senha</h3>
+      <p class="sub">Ao trocar, todas as suas <strong>outras</strong> sessões são encerradas —
+         é isso que resolve uma senha vazada. A sessão desta janela continua aberta.</p>
+      <form id="form-senha">
+        <div class="linha-campos">
+          <label>Senha atual<span class="marca-obrigatorio" aria-hidden="true">*</span>
+            <input name="senha_atual" type="password" autocomplete="current-password" required>
+          </label>
+          <label>Nova senha<span class="marca-obrigatorio" aria-hidden="true">*</span>
+            <input name="senha_nova" type="password" autocomplete="new-password" minlength="8" required>
+            <span class="dica">Mínimo de 8 caracteres, diferente da atual</span>
+          </label>
+          <label>Repita a nova senha<span class="marca-obrigatorio" aria-hidden="true">*</span>
+            <input name="senha_confere" type="password" autocomplete="new-password" minlength="8" required>
+          </label>
+        </div>
+        <button class="botao primario" type="submit">Trocar senha</button>
+        <div id="retorno-senha" hidden></div>
+      </form>
+    </div>`;
+
+  $('#form-senha').addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    const formulario = evento.target;
+    limparAviso('#retorno-senha');
+    const { senha_atual: atual, senha_nova: nova, senha_confere: confere } =
+      Object.fromEntries(new FormData(formulario));
+
+    // Conferência das duas digitações no navegador: erro de digitação aqui não
+    // precisa de ida ao servidor, e a mensagem chega no ato.
+    if (nova !== confere) {
+      mostrarAviso('#retorno-senha', 'erro', 'A nova senha e a repetição não são iguais.');
+      formulario.elements.senha_confere.focus();
+      return;
+    }
+
+    await comBotaoOcupado(formulario.querySelector('button[type=submit]'), 'Trocando…', async () => {
+      try {
+        const resposta = await api('/api/me/senha', {
+          metodo: 'POST', corpo: { senha_atual: atual, senha_nova: nova },
+        });
+        formulario.reset();
+        estado.usuario.senha_provisoria = false;
+        mostrarAviso('#retorno-senha', 'sucesso',
+          resposta.aviso ? `Senha trocada. ${resposta.aviso}.` : 'Senha trocada.');
+      } catch (erro) {
+        if (erro.message === 'sessão expirada') return;
+        mostrarAviso('#retorno-senha', 'erro', erro.message, erro.detalhes);
+      }
+    });
+  });
+}
+
 async function telaUsuarios() {
   const { usuarios } = await api('/api/usuarios');
-  const linhas = usuarios.map((u) => `
-    <tr>
-      <td><strong>${escapar(u.nome)}</strong></td><td>${escapar(u.email)}</td>
-      <td>${escapar(u.matricula || '—')}</td><td>${escapar(u.papel)}</td>
-    </tr>`).join('');
+  const eu = estado.usuario ? estado.usuario.id : null;
+
+  const linhas = usuarios.map((u) => {
+    const inativo = !u.ativo;
+    return `
+    <tr class="${inativo ? 'linha-inativa' : ''}">
+      <td><strong>${escapar(u.nome)}</strong>${u.id === eu ? ' <span class="tag">você</span>' : ''}</td>
+      <td>${escapar(u.email)}</td>
+      <td>${escapar(u.matricula || '—')}</td>
+      <td>${escapar(u.papel)}</td>
+      <td>
+        ${inativo ? '<span class="tag inativa">Inativo</span>' : '<span class="tag ativa">Ativo</span>'}
+        ${u.senha_provisoria ? '<span class="tag pendente">senha provisória</span>' : ''}
+        ${u.sessoes_ativas ? `<br><small>${u.sessoes_ativas} sessão(ões) aberta(s)</small>` : ''}
+      </td>
+      <td class="acoes-linha">
+        <button class="botao pequeno" data-acao="senha" data-id="${u.id}" data-nome="${escapar(u.nome)}">Redefinir senha</button>
+        <button class="botao pequeno" data-acao="situacao" data-id="${u.id}" data-nome="${escapar(u.nome)}"
+                data-ativo="${u.ativo ? '1' : '0'}">${inativo ? 'Reativar' : 'Desativar'}</button>
+        <button class="botao pequeno" data-acao="sessoes" data-id="${u.id}" data-nome="${escapar(u.nome)}"
+                ${u.sessoes_ativas ? '' : 'disabled'}>Encerrar sessões</button>
+      </td>
+    </tr>`;
+  }).join('');
 
   $('#conteudo').innerHTML = `
     <h2>Usuários</h2>
+    <p class="sub">Toda senha definida aqui nasce <strong>provisória</strong>: a pessoa é obrigada a
+       trocá-la no primeiro acesso, para que ninguém além dela conheça a própria senha.</p>
     <div class="cartao rolagem-tabela">
       <table>
-        <thead><tr><th>Nome</th><th>E-mail</th><th>Matrícula</th><th>Papel</th></tr></thead>
-        <tbody>${linhas}</tbody>
+        <thead><tr><th>Nome</th><th>E-mail</th><th>Matrícula</th><th>Papel</th><th>Situação</th><th>Ações</th></tr></thead>
+        <tbody id="corpo-usuarios">${linhas}</tbody>
       </table>
     </div>
+    <div id="retorno-acao" hidden></div>
     <div class="cartao">
       <h3>Novo usuário</h3>
       <p class="legenda-obrigatorio"><span class="marca-obrigatorio" aria-hidden="true">*</span> campo obrigatório</p>
@@ -982,7 +1206,7 @@ async function telaUsuarios() {
           </label>
           <label>Senha inicial<span class="marca-obrigatorio" aria-hidden="true">*</span>
             <input name="senha" type="password" minlength="8" required>
-            <span class="dica">Mínimo de 8 caracteres</span>
+            <span class="dica">Mínimo de 8 caracteres; a pessoa vai trocá-la ao entrar</span>
           </label>
         </div>
         <button class="botao primario" type="submit">Criar usuário</button>
@@ -1001,6 +1225,74 @@ async function telaUsuarios() {
         if (erro.message !== 'sessão expirada') mostrarAviso('#retorno-usuario', 'erro', erro.message, erro.detalhes);
       }
     });
+  });
+
+  $('#corpo-usuarios').addEventListener('click', (evento) => {
+    const botao = evento.target.closest('button[data-acao]');
+    if (botao) acaoDeUsuario(botao);
+  });
+}
+
+// Cada ação confirma antes: desativar alguém e derrubar sessão são coisas que
+// a pessoa do outro lado sente na hora.
+async function acaoDeUsuario(botao) {
+  const { acao, id, nome } = botao.dataset;
+
+  if (acao === 'senha') {
+    const escolha = await confirmarDialogo({
+      titulo: `Redefinir a senha de ${nome}`,
+      texto: 'A pessoa será desconectada de todos os dispositivos e terá de trocar esta senha '
+        + 'no próximo acesso. Combine a senha por um canal seguro, nunca por e-mail comum.',
+      rotuloOk: 'Redefinir',
+      campo: { rotulo: 'Nova senha provisória', tipo: 'password', obrigatorio: true, minimo: 8 },
+    });
+    if (!escolha) return;
+    await executarAcao(botao, `/api/usuarios/${id}/senha`, { senha_nova: escolha.valor },
+      (r) => `Senha de ${nome} redefinida. ${r.sessoes_encerradas} sessão(ões) encerrada(s).`);
+    return;
+  }
+
+  if (acao === 'situacao') {
+    const ativando = botao.dataset.ativo === '0';
+    const escolha = await confirmarDialogo({
+      titulo: ativando ? `Reativar ${nome}` : `Desativar ${nome}`,
+      texto: ativando
+        ? 'A pessoa volta a conseguir entrar, com a mesma senha de antes.'
+        : 'O acesso é cortado na hora, inclusive nas sessões abertas. O histórico dela permanece '
+          + 'intacto na trilha de auditoria — desativar não apaga nada.',
+      rotuloOk: ativando ? 'Reativar' : 'Desativar',
+      perigo: !ativando,
+    });
+    if (!escolha) return;
+    await executarAcao(botao, `/api/usuarios/${id}/situacao`, { ativo: ativando },
+      () => (ativando ? `${nome} foi reativado.` : `${nome} foi desativado e desconectado.`));
+    return;
+  }
+
+  if (acao === 'sessoes') {
+    const escolha = await confirmarDialogo({
+      titulo: `Encerrar as sessões de ${nome}`,
+      texto: 'Usado quando há suspeita de sessão roubada. A senha continua valendo: a pessoa '
+        + 'entra de novo normalmente. Para trocar a senha também, use Redefinir senha.',
+      rotuloOk: 'Encerrar sessões',
+      perigo: true,
+    });
+    if (!escolha) return;
+    await executarAcao(botao, `/api/usuarios/${id}/sessoes`, {},
+      (r) => `${r.sessoes_encerradas} sessão(ões) de ${nome} encerrada(s).`);
+  }
+}
+
+async function executarAcao(botao, caminho, corpo, mensagem) {
+  await comBotaoOcupado(botao, 'Aplicando…', async () => {
+    try {
+      const resposta = await api(caminho, { metodo: 'POST', corpo });
+      await telaUsuarios();
+      mostrarAviso('#retorno-acao', 'sucesso', mensagem(resposta));
+    } catch (erro) {
+      if (erro.message === 'sessão expirada') return;
+      mostrarAviso('#retorno-acao', 'erro', erro.message, erro.detalhes);
+    }
   });
 }
 

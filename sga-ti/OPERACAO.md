@@ -32,14 +32,16 @@ const d=new DatabaseSync(process.env.SGA_TI_DB||'data/sga-ti.db');
 console.log('sessões encerradas:', d.prepare('DELETE FROM sessoes').run().changes);"
 ```
 
-Bloquear um usuário específico sem apagar o histórico dele:
+**Bloquear uma pessoa** não precisa mais de comando: na aba **Usuários**, botão **Desativar** na
+linha dela. O acesso cai na hora, inclusive nas sessões já abertas, e o histórico continua
+intacto na trilha — desativar não apaga nada.
 
-```bash
-node -e "const {DatabaseSync}=require('node:sqlite');
-const d=new DatabaseSync(process.env.SGA_TI_DB||'data/sga-ti.db');
-d.prepare('UPDATE usuarios SET ativo = 0 WHERE email = ?').run('pessoa@empresa.com');
-d.prepare('DELETE FROM sessoes WHERE usuario_id IN (SELECT id FROM usuarios WHERE ativo = 0)').run();"
-```
+Na mesma linha há **Encerrar sessões** (derruba os acessos sem mexer na senha, para suspeita de
+sessão roubada) e **Redefinir senha** (define uma senha provisória que a pessoa é obrigada a
+trocar no próximo acesso).
+
+O comando acima, que apaga **todas** as sessões de uma vez, continua sendo a opção mais drástica —
+use quando não souber qual conta foi comprometida.
 
 ---
 
@@ -100,7 +102,10 @@ merece aviso imediato — significa que alguém tentou registrar evento em nome 
 
 ### Suspeita de acesso indevido (senha vazada, sessão roubada)
 
-1. Encerre todas as sessões (seção 1) e troque a senha da conta afetada.
+1. Na aba **Usuários**, use **Redefinir senha** na linha da pessoa: isso derruba todas as sessões
+   dela e obriga a troca no próximo acesso. Combine a senha provisória por um canal seguro —
+   nunca por e-mail comum. Se não souber qual conta foi atingida, encerre **todas** as sessões
+   (seção 1).
 2. No registro de segurança, levante o que aquele endereço/usuário fez.
 3. Na aba **Auditoria**, liste os eventos criados por aquele usuário no período.
 4. **Não apague nada.** Se houver registro falso, crie uma **Retificação** apontando o evento

@@ -809,3 +809,60 @@ dialog.dialogo::backdrop { background: rgba(3, 5, 10, 0.6); }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Paginação e rodapé de contagem
+
+   O número que importa é o TOTAL, não quantos couberam na página: antes a
+   lista cortava em silêncio e quem olhava a tela tirava conclusão errada.
+   --------------------------------------------------------------------------- */
+.paginacao {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e3);
+  margin-top: var(--e3);
+  padding-top: var(--e3);
+  border-top: 1px solid var(--borda);
+  font-size: 12.5px;
+  color: var(--texto-suave);
+}
+.paginacao-contagem strong { color: var(--texto); font-weight: 600; }
+.paginacao-botoes { display: flex; gap: var(--e2); }
+
+/* ---------------------------------------------------------------------------
+   Marcadores de situação na lista de usuários
+   --------------------------------------------------------------------------- */
+.tag {
+  display: inline-block;
+  padding: 2px var(--e2);
+  border: 1px solid var(--borda-forte);
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  color: var(--texto-suave);
+}
+.tag.ativa { color: var(--ok); border-color: var(--st-estoque-b); background: var(--ok-suave); }
+.tag.inativa { color: var(--texto-fraco); background: var(--superficie-2); }
+/* Senha provisória é pendência, não erro: cor de atenção, não de perigo. */
+.tag.pendente { color: var(--alerta); border-color: var(--st-manutencao-b); background: var(--alerta-suave); }
+
+/* Linha de quem está desativado fica recuada visualmente, sem sumir: o
+   histórico da pessoa continua valendo e precisa ser encontrável. */
+.linha-inativa td { opacity: 0.62; }
+
+.acoes-linha {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--e2);
+}
+.acoes-linha .botao { white-space: nowrap; }
+
+/* No celular, as ações empilham em vez de espremer o resto da tabela. */
+@media (max-width: 720px) {
+  .acoes-linha { flex-direction: column; align-items: stretch; }
+  .paginacao { flex-direction: column; align-items: flex-start; }
+}

@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const { aplicarMigracoes } = require('./migracoes');
 
 const SCHEMA = `
 PRAGMA foreign_keys = ON;
@@ -121,7 +122,13 @@ function abrirBanco(caminho) {
   }
   const db = new DatabaseSync(caminho);
   db.exec('PRAGMA journal_mode = WAL;');
+  // O esquema base cria o que ainda não existe; as migrações levam daí para
+  // frente. Nesta ordem: a migração 001 mexe numa tabela que o esquema cria.
   db.exec(SCHEMA);
+  const migracao = aplicarMigracoes(db);
+  if (migracao.aplicadas.length) {
+    console.log(`Banco: esquema ${migracao.de} -> ${migracao.para} (${migracao.aplicadas.join(', ')})`);
+  }
   return db;
 }
 

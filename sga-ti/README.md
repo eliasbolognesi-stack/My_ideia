@@ -213,14 +213,20 @@ Autenticação: `POST /api/auth/login` → `{ token }`; demais rotas usam `Autho
 | `GET /api/saude` | **Pública.** Responde 200 com a versão e se o banco abre — para monitor de uptime |
 | `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/me` | Sessão |
 | `GET /api/dashboard` | Contagens por status, pendências, últimos eventos |
-| `GET /api/ativos?status=&q=` | Lista/busca de ativos |
+| `GET /api/ativos?status=&q=&pagina=&por_pagina=` | Lista/busca de ativos, com `total` e paginação |
+| `GET /api/ativos.csv?status=&q=` | Exporta a lista filtrada (planilha) |
 | `GET /api/ativos/:id` | Ativo + histórico completo |
 | `GET /api/ativos/:id/integridade` | Recomputa a cadeia de hashes |
 | `POST /api/eventos` | `{ tipo, dados }` — registra qualquer evento |
 | `GET /api/aprovacoes?status=pendente` | Fila de aprovação de descartes |
 | `POST /api/aprovacoes/:id/decisao` | `{ decisao: aprovado\|rejeitado, justificativa }` (aprovador/admin) |
-| `GET /api/auditoria/eventos?colaborador=&tipo=&ativo_id=` | Trilha filtrável (LGPD art. 18) |
+| `GET /api/auditoria/eventos?colaborador=&tipo=&ativo_id=` | Trilha filtrável (LGPD art. 18), paginada |
+| `GET /api/auditoria/eventos.csv` | Exporta a trilha, com o mesmo escopo por papel |
+| `POST /api/me/senha` | Troca a própria senha (derruba as outras sessões) |
 | `GET/POST /api/usuarios` | Gestão de usuários (admin) |
+| `POST /api/usuarios/:id/senha` | Redefine a senha de alguém — nasce provisória (admin) |
+| `POST /api/usuarios/:id/situacao` | Ativa ou desativa uma pessoa (admin) |
+| `POST /api/usuarios/:id/sessoes` | Derruba as sessões de uma pessoa (admin) |
 | `POST /api/lgpd/anonimizar` | Rotina de anonimização pós-retenção (admin) |
 | `POST /api/webhook/n8n` | Entrada do JSON da seção 10 do prompt (header `X-Api-Key`) |
 
@@ -291,6 +297,7 @@ sga-ti/
 ├── src/
 │   ├── config.js           # variáveis de ambiente
 │   ├── db.js               # schema, índices parciais, triggers de imutabilidade
+│   ├── migracoes.js        # migrações numeradas, aplicadas uma vez, em transação
 │   ├── hash.js             # serialização canônica + hash encadeado
 │   ├── auth.js             # senhas, sessões, admin inicial
 │   ├── regras.js           # validações e transições (seções 4/5/6 do prompt)
@@ -300,6 +307,7 @@ sga-ti/
 │   ├── servico-eventos.js  # registro de eventos, aprovações, integridade, LGPD
 │   ├── n8n.js              # tradução do JSON da seção 10 → eventos internos
 │   └── api.js              # rotas REST + papéis + webhook
+├── migracoes/              # uma migração por arquivo: NNN-descricao.sql
 ├── DEPLOY.md               # primeiro deploy, atualização e plano de reversão
 ├── CHANGELOG.md            # o que mudou em cada versão (leia antes de atualizar)
 ├── OPERACAO.md             # desligar, restaurar e responder a incidente
@@ -320,7 +328,9 @@ sga-ti/
 └── test/
     ├── sga-ti.test.js      # 22 testes das regras não negociáveis
     ├── seguranca.test.js   # 24 testes das proteções (incl. servidor real por HTTP)
-    └── deploy.test.js      # 13 testes de saúde, rotação e recusa no boot
+    ├── deploy.test.js      # 13 testes de saúde, rotação e recusa no boot
+    ├── contas.test.js      # 15 testes de senha, desativação, sessões e migrações
+    └── listas.test.js      # 12 testes de paginação e exportação
 ```
 
 ## Antes de publicar
@@ -338,13 +348,14 @@ em [`DEPLOY.md`](DEPLOY.md). Este é o resumo do que depende de uma decisão sua
 - [ ] Gerar uma chave de webhook por origem (`openssl rand -hex 32`) e configurar
       `SGA_TI_WEBHOOK_KEYS`; nunca usar o modo legado em produção.
 - [ ] Preencher o contato do DPO em `public/privacidade.html` e os responsáveis em `OPERACAO.md`.
-- [ ] Trocar a senha do admin inicial e cadastrar as pessoas com o papel mínimo necessário.
+- [ ] Trocar a senha do admin inicial (o sistema obriga) e cadastrar as pessoas com o papel
+      mínimo necessário. Toda senha definida por um administrador nasce **provisória**: a pessoa
+      é obrigada a trocá-la no primeiro acesso, para que ninguém além dela saiba a própria senha.
 - [ ] Definir `SGA_TI_DOMINIOS_EVIDENCIA` com o domínio onde ficam os termos de baixa.
 - [ ] Fixar a versão do Node no servidor (`apt-mark hold nodejs`) — ver [`.nvmrc`](.nvmrc).
 
-**Limitações conhecidas:** o sistema só funciona na raiz de um domínio (`sga-ti.empresa.com`), não
-em subcaminho; e não há sistema de migração — o esquema é criado na primeira subida, então a
-primeira alteração de coluna com dados em produção precisa de um plano à parte.
+**Limitação conhecida:** o sistema só funciona na raiz de um domínio (`sga-ti.empresa.com`), não
+em subcaminho.
 
 ## Próximos passos sugeridos
 
@@ -352,6 +363,4 @@ primeira alteração de coluna com dados em produção precisa de um plano à pa
 - Exportação CSV da auditoria e relatório periódico por e-mail via n8n.
 - SSO corporativo (OIDC) no lugar do login local, mantendo os papéis.
 - Criptografia do banco em repouso (LGPD art. 46) — hoje depende do disco do servidor.
-- Sistema de migração (`PRAGMA user_version` + migrações numeradas), **antes** da primeira mudança
-  de esquema com dados em produção.
 - Servir em subcaminho, trocando os caminhos absolutos do HTML por relativos.
