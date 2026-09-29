@@ -3,7 +3,7 @@
 **Sistema de Gestão de Ativos e Estoque de TI · versão 1.5.1 · setembro de 2026**
 
 Documento para quem precisa entender o sistema sem ler código: o que ele resolve, como funciona
-hoje, como vai se ligar ao portal da TI (GLPI) e o que falta fazer.
+hoje, como vai se ligar ao portal da TI e o que falta fazer.
 
 ---
 
@@ -38,7 +38,7 @@ Cada equipamento tem uma situação, e só muda de situação por um evento regi
 ```
 Recebimento → Em estoque → Formatação → Movimentação → Em uso
                                 ↑            ↓
-                          Manutenção ←────────┘
+                          Manutenção ←───────┘
                                 ↓
                  Reservado para descarte → Descartado
 ```
@@ -107,7 +107,7 @@ A verificação é feita **no servidor**, não apenas na tela. Esconder um botã
 1. **Pela tela** — formulário por tipo de evento, com os campos obrigatórios marcados.
 2. **Por mensagem de texto** (WhatsApp/e-mail) — um fluxo no n8n lê a mensagem, a IA extrai os
    campos e o sistema valida. **Se faltar dado, a IA pergunta em vez de inventar.**
-3. **Em breve: pelo GLPI** — é a Parte 3 deste documento.
+3. **Em breve: pelo portal da TI** — é a Parte 3 deste documento.
 
 ## Sob o capô, em uma linha
 
@@ -116,7 +116,7 @@ biblioteca de terceiros para ser invadida ou abandonada.
 
 ---
 
-# Parte 3 — Como vai funcionar ligado ao GLPI
+# Parte 3 — Como vai funcionar ligado ao portal da TI
 
 ## O objetivo
 
@@ -125,7 +125,7 @@ duas vezes e **sem IA no meio** — ligação direta entre os dois sistemas.
 
 ## Quem é dono do quê
 
-| | GLPI | SGA-TI |
+| | Portal da TI | SGA-TI |
 |---|---|---|
 | **Quem é o equipamento** (patrimônio, S/N, modelo) | **fonte da verdade** | espelho, atualizado a cada evento |
 | **O que aconteceu** | o chamado | **trilha imutável** |
@@ -136,13 +136,13 @@ Essa divisão é o que torna a integração sustentável: cada sistema faz o que
 ## O caminho de um chamado
 
 ```
-Técnico fecha o chamado no GLPI
-   │  o GLPI avisa o SGA-TI na hora (webhook assinado)
+Técnico fecha o chamado no portal da TI
+   │  o portal avisa o SGA-TI na hora (webhook assinado)
    ▼
 SGA-TI confere a assinatura e recusa envio repetido
    │
-   ├─ pergunta ao GLPI: qual equipamento está neste chamado?
-   ├─ pergunta ao GLPI: quem é o técnico responsável?
+   ├─ pergunta ao portal: qual equipamento está neste chamado?
+   ├─ pergunta ao portal: quem é o técnico responsável?
    │
    ▼
 Passa pelas MESMAS regras da tela → evento na trilha imutável
@@ -150,7 +150,7 @@ Passa pelas MESMAS regras da tela → evento na trilha imutável
 
 ## Os quatro fluxos
 
-| No GLPI | No SGA-TI |
+| No portal | No SGA-TI |
 |---|---|
 | Entrega de equipamento | Movimentação para o colaborador |
 | Devolução ao estoque | Movimentação para o estoque |
@@ -159,13 +159,13 @@ Passa pelas MESMAS regras da tela → evento na trilha imutável
 
 ## Três decisões que vale entender
 
-**1. O mapeamento fica no GLPI, não numa configuração à parte.** Cada situação vira um webhook
-próprio no GLPI, filtrado pela categoria do chamado, e o conteúdo enviado declara qual evento é.
-Quem administra categorias já administra isso — a alternativa seria uma tabela de/para no SGA-TI
-que ninguém lembraria de atualizar quando a categoria mudasse de nome.
+**1. O mapeamento fica no portal da TI, não numa configuração à parte.** Cada situação vira um
+webhook próprio no portal, filtrado pela categoria do chamado, e o conteúdo enviado declara qual
+evento é. Quem administra categorias já administra isso — a alternativa seria uma tabela de/para
+no SGA-TI que ninguém lembraria de atualizar quando a categoria mudasse de nome.
 
-**2. Quem é a pessoa, o SGA-TI pergunta ao GLPI.** O conteúdo recebido diz apenas **qual
-chamado**. Quem é o técnico vem de uma consulta autenticada do SGA-TI ao GLPI. Se viesse no
+**2. Quem é a pessoa, o SGA-TI pergunta ao portal.** O conteúdo recebido diz apenas **qual
+chamado**. Quem é o técnico vem de uma consulta autenticada do SGA-TI ao portal. Se viesse no
 corpo da mensagem, quem forjasse um envio escolheria em nome de quem registrar. E se esse técnico
 não for usuário ativo do SGA-TI, o evento é **recusado** — registro anônimo continua proibido.
 
@@ -175,10 +175,10 @@ regra.
 
 ## Segurança da ligação
 
-O GLPI 11 assina cada envio, e o SGA-TI confere antes de aceitar:
+O portal da TI assina cada envio, e o SGA-TI confere antes de aceitar:
 
-- **Antes de entregar qualquer coisa**, o GLPI testa o endereço com um desafio criptográfico. Só
-  entrega para quem responde certo.
+- **Antes de entregar qualquer coisa**, o portal testa o endereço com um desafio criptográfico.
+  Só entrega para quem responde certo.
 - **Cada envio vem assinado** com um segredo compartilhado. Assinatura errada, segredo trocado ou
   envio repetido são recusados.
 - O segredo fica no arquivo de configuração do servidor, legível só pelo serviço.
@@ -200,8 +200,8 @@ chamado, o motivo e um caminho para completar à mão. Com contador no menu, com
 
 | Fase | O quê | Por que nesta ordem | Tamanho |
 |---|---|---|---|
-| **1** | Receber e conferir: responder ao desafio do GLPI, validar a assinatura, guardar o conteúdo original | Sem isto o GLPI **nem entrega** o primeiro evento | ~4 h |
-| **2** | Ligação com o cadastro do GLPI: buscar equipamento e técnico; ajuste no banco para guardar o vínculo | O evento precisa saber de qual equipamento se trata | ~5 h |
+| **1** | Receber e conferir: responder ao desafio do portal, validar a assinatura, guardar o conteúdo original | Sem isto o portal **nem entrega** o primeiro evento | ~4 h |
+| **2** | Ligação com o cadastro do portal: buscar equipamento e técnico; ajuste no banco para guardar o vínculo | O evento precisa saber de qual equipamento se trata | ~5 h |
 | **3** | Os quatro fluxos, com o descarte indo para aprovação | O miolo da integração | ~6 h |
 | **4** | Tela de pendências | Sem ela, recusa vira perda silenciosa | ~3 h |
 | **5** | Documentação e ensaio ponta a ponta | Para você conseguir ligar sozinho | ~4 h |
@@ -211,18 +211,18 @@ chamado, o motivo e um caminho para completar à mão. Com contador no menu, com
 ## O que vai ser entregue
 
 ```
-sga-ti/src/glpi.js              cliente do GLPI + tradução chamado → evento
-sga-ti/src/api.js               rotas do webhook (desafio e entrega)
-sga-ti/server.js                guardar o conteúdo original, para conferir a assinatura
-sga-ti/migracoes/002-glpi.sql   vínculo com o GLPI e controle de envio repetido
-sga-ti/public/app.js            tela Integrações
-sga-ti/deploy/glpi.md           passo a passo de configuração no GLPI
+sga-ti/src/portal.js             cliente do portal + tradução chamado → evento
+sga-ti/src/api.js                rotas do webhook (desafio e entrega)
+sga-ti/server.js                 guardar o conteúdo original, para conferir a assinatura
+sga-ti/migracoes/002-portal.sql  vínculo com o portal e controle de envio repetido
+sga-ti/public/app.js             tela Integrações
+sga-ti/deploy/portal.md          passo a passo de configuração no portal
 ```
 
 ## Como vai ser verificado
 
-**O que eu consigo provar aqui:** vou construir um **GLPI de mentira** — um servidor que faz o
-desafio, assina os envios exatamente como o código real do GLPI e responde como a API dele — e
+**O que eu consigo provar aqui:** vou construir um **portal de mentira** — um servidor que faz o
+desafio, assina os envios exatamente como o código real do portal e responde como a API dele — e
 rodar contra o SGA-TI de verdade. Cada item abaixo vira um teste automatizado:
 
 - o desafio é respondido corretamente;
@@ -230,9 +230,9 @@ rodar contra o SGA-TI de verdade. Cada item abaixo vira um teste automatizado:
 - o mesmo envio chegando duas vezes registra **um** evento só;
 - os quatro fluxos produzem o evento certo, e a baixa cai na fila de aprovação;
 - técnico não cadastrado → evento recusado e visível na tela de pendências;
-- equipamento que está no GLPI e não no SGA-TI é criado a partir dos dados do GLPI.
+- equipamento que está no portal e não no SGA-TI é criado a partir dos dados do portal.
 
-**O que eu não consigo verificar daqui, e não vou fingir que sim:** o GLPI real de vocês — as
+**O que eu não consigo verificar daqui, e não vou fingir que sim:** o portal real de vocês — as
 categorias, o formato exato do conteúdo e se a API está habilitada. A primeira ligação de verdade
 é sua; com o log do sistema e a tela de pendências, ajustamos em uma rodada.
 
@@ -240,31 +240,31 @@ categorias, o formato exato do conteúdo e se a API está habilitada. A primeira
 
 | Risco | Tamanho | O que fazer |
 |---|---|---|
-| O formato do conteúdo enviado pelo GLPI difere do previsto | Médio | A tela de pendências mostra o que chegou; ajuste de uma rodada |
-| A API do GLPI está desabilitada na instalação de vocês | Médio | Conferir antes de começar (Configuração → Geral → API) |
+| O formato do conteúdo enviado pelo portal difere do previsto | Médio | A tela de pendências mostra o que chegou; ajuste de uma rodada |
+| A API do portal está desabilitada na instalação de vocês | Médio | Conferir antes de começar (Configuração → Geral → API) |
 | O banco usa uma função do Node ainda marcada como experimental | Baixo | Versão do Node fixada no servidor; documentado |
 | O sistema só funciona na raiz de um domínio, não em subcaminho | Baixo | Usar um subdomínio (`sga-ti.empresa.com`) |
 
 ## O que depende de você
 
-1. **Conferir se a API do GLPI está habilitada** e gerar as credenciais de um usuário de serviço
+1. **Conferir se a API do portal está habilitada** e gerar as credenciais de um usuário de serviço
    (só leitura).
 2. **Os nomes das categorias** de chamado (entrega, devolução, defeito, baixa) — para a
    documentação sair com os seus nomes em vez de exemplos.
 3. **Decidir sobre a carga inicial** (abaixo).
-4. Depois de pronto: **criar os webhooks no GLPI** seguindo o passo a passo, e fazer a primeira
+4. Depois de pronto: **criar os webhooks no portal** seguindo o passo a passo, e fazer a primeira
    entrega de verdade.
 
 ## Uma decisão em aberto
 
-Com o inventário no GLPI, o cadastro do SGA-TI vira espelho. Vale uma **carga inicial** dos
-equipamentos do GLPI, para a tela de ativos já nascer completa em vez de ir se preenchendo
+Com o inventário no portal da TI, o cadastro do SGA-TI vira espelho. Vale uma **carga inicial**
+dos equipamentos do portal, para a tela de ativos já nascer completa em vez de ir se preenchendo
 conforme os chamados acontecem?
 
 - **Com carga inicial:** +meio dia; inventário completo desde o primeiro dia.
 - **Sem:** começa vazio e se preenche sozinho, ao longo de semanas.
 
-Recomendo **com**, se o cadastro do GLPI estiver confiável.
+Recomendo **com**, se o cadastro do portal estiver confiável.
 
 ---
 
@@ -288,12 +288,12 @@ em navegador real.
 
 ## Próximo passo
 
-A integração com o GLPI (Parte 3) **ainda não foi iniciada** — este documento é o plano dela.
-Quando você disser para começar, eu sigo pela **fase 1**, que é o que destrava todo o resto: sem
-responder ao desafio do GLPI, ele nem entrega o primeiro evento.
+A integração com o portal da TI (Parte 3) **ainda não foi iniciada** — este documento é o plano
+dela. Quando você disser para começar, eu sigo pela **fase 1**, que é o que destrava todo o
+resto: sem responder ao desafio do portal, ele nem entrega o primeiro evento.
 
 Enquanto isso, os dois itens da lista *"O que depende de você"* que podem andar em paralelo são a
-conferência da API do GLPI e os nomes das categorias de chamado.
+conferência da API do portal e os nomes das categorias de chamado.
 
 ---
 
